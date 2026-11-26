@@ -3,7 +3,7 @@
    Tek dosyalık istemci uygulaması. Sunucu gerekmez.
    ========================================================= */
 'use strict';
-const JARVIS_VERSION = '9';
+const JARVIS_VERSION = '11';
 
 /* ---------- yardımcılar ---------- */
 const $ = s => document.querySelector(s);
@@ -23,7 +23,7 @@ const DEFAULTS = {
   groqModel: 'openai/gpt-oss-120b',
   orModel: 'openrouter/free',
   clientId: '', deviceName: isIOS ? (/iPad/.test(navigator.userAgent) || navigator.maxTouchPoints > 1 && !/iPhone/.test(navigator.userAgent) ? 'iPad' : 'iPhone') : 'Bilgisayar',
-  ytKey: '', ytMode: 'auto',
+  ytKey: '', ytMode: 'auto', tavilyKey: '',
   voice: '', rate: 1.0, wake: false, deviceId: uid(), googleWanted: false
 };
 const S = Object.assign({}, DEFAULTS, load('jarvis.settings', {}));
@@ -46,6 +46,39 @@ let agent = null;               // PC ajanı durumu
 let fileResults = [];          // son dosya arama sonuçları
 let pending = [];              // konuşmadan sonra çalışacak uzun işler
 let weather = null, events = [], news = null, wa = null;
+
+/* ---------- zaman (her şey cihazın yerel saatinden) ---------- */
+const pad2 = n => String(n).padStart(2, '0');
+const ymd = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;   // yerel tarih (UTC değil)
+const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return ''; } })();
+const dayPart = h => h < 5 ? 'gece' : h < 11 ? 'sabah' : h < 14 ? 'öğle' : h < 18 ? 'öğleden sonra' : h < 22 ? 'akşam' : 'gece';
+const longDate = d => d.toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const clock = d => d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+function timeBlock() {
+  const now = new Date(), rows = [];
+  for (let i = -1; i < 8; i++) {
+    const d = new Date(now); d.setDate(d.getDate() + i);
+    const tag = { '-1': 'dün', 0: 'BUGÜN', 1: 'yarın', 2: 'öbür gün' }[i] || '';
+    rows.push(`${tag ? tag + ': ' : ''}${d.toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' })} = ${ymd(d)}`);
+  }
+  return `ZAMAN (kesin bilgi, kullanıcının cihaz saatinden alındı; eğitim verilerindeki tarihleri DEĞİL bunu kullan):
+Şu an: ${longDate(now)}, saat ${clock(now)} (${dayPart(now.getHours())})${TZ ? ', saat dilimi ' + TZ : ''}.
+Gün tablosu ("yarın", "cuma", "haftaya salı" gibi ifadeleri bu tabloyla tarihe çevir):
+${rows.join('\n')}
+${now.getHours() < 5 ? 'Not: Şu an gece yarısını geçti. Kullanıcı "yarın" derse uyandıktan sonraki günü, yani BUGÜN\'ün tarihini kastediyor olabilir; emin değilsen hangi günü kastettiğini sor.\n' : ''}Selamlaşmayı saate göre yap (gece "günaydın" deme). Sohbet geçmişindeki mesajların başındaki [ ] içindeki zaman, o mesajın ne zaman yazıldığını gösterir; eski mesajlardaki "bugün/yarın" ifadelerini o güne göre yorumla.`;
+}
+function msgStamp(t) {
+  const d = new Date(t), now = new Date();
+  const days = Math.round((new Date(ymd(now)) - new Date(ymd(d))) / 864e5);
+  return `[${days === 0 ? 'bugün' : days === 1 ? 'dün' : d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', weekday: 'long' })} ${clock(d)}] `;
+}
+function timeAnswer(t) {
+  const s = t.toLocaleLowerCase('tr'), now = new Date(), h = M.profile.hitap || 'efendim';
+  if (/saat kaç|saati söyle|saat ne/.test(s)) return `Saat ${clock(now)}, ${h}.`;
+  if (/(bugün|bu gün).*(günlerden|ayın kaçı|tarih|ne günü|hangi gün)|günlerden ne|tarih ne|bugünün tarihi|ayın kaçı|hangi gündeyiz/.test(s)) return `Bugün ${longDate(now)}, ${h}.`;
+  if (/yarın (günlerden|ne günü|hangi gün|ayın kaçı)/.test(s)) { const d = new Date(now); d.setDate(d.getDate() + 1); return `Yarın ${longDate(d)}.`; }
+  return null;
+}
 
 /* =========================================================
    ARAYÜZ
@@ -438,10 +471,12 @@ function systemPrompt(userText = '') {
   const mailCtx = mails.slice(0, 8).map((m, i) => `${i + 1}. [önem ${m.score}] ${m.from} — "${m.subject}" — ${m.snippet.slice(0, 140)} (${m.ago})`).join('\n') || (token ? 'Okunmamış önemli mail yok.' : 'Google bağlı değil.');
   const stale = mails.filter(m => m.hours >= 24).length;
   const taskCtx = tasks.map(t => `- ${t.title}${t.due ? ' (son tarih ' + t.due + ')' : ''}`).join('\n') || (token ? 'Liste boş.' : 'Google bağlı değil.');
-  return `Sen JARVIS'sin: ${p.name || 'kullanıcının'} kişisel yapay zeka asistanısın. Kullanıcıya "${p.hitap || 'efendim'}" diye hitap et.
+  return `${timeBlock()}
+
+Sen JARVIS'sin: ${p.name || 'kullanıcının'} kişisel yapay zeka asistanısın. Kullanıcıya "${p.hitap || 'efendim'}" diye hitap et.
 Kişiliğin: sakin, zeki, son derece kibar, ince ve kuru bir espri anlayışı olan sadık bir asistan. Her zaman Türkçe konuş.
 Cevapların SESLİ okunacak: markdown, yıldız, emoji, madde işareti, link kullanma. Genelde 1-3 kısa cümle; brifing ve mail okumada en fazla 6 cümle.
-Şu an: ${now.toLocaleString('tr-TR', { dateStyle: 'full', timeStyle: 'short' })}. Konuştuğun cihaz: ${S.deviceName}.
+Konuştuğun cihaz: ${S.deviceName}.
 
 KULLANICI HAKKINDA:
 ${p.about || '(henüz bilgi yok)'}
@@ -475,6 +510,7 @@ EYLEMLER: Bir iş yapman gerektiğinde cevabının EN SONUNA, her biri ayrı sat
 [[MUZIK: sonraki | onceki | oynat | durdur]]
 [[YOUTUBE: arama sorgusu | sarki veya liste]]   (kullanıcı müzik/şarkı/sanatçı/video çalmak istediğinde. Belirli bir şarkı → sarki, örn. "Duman'dan Bu Akşam'ı çal" → [[YOUTUBE: Duman Bu Akşam | sarki]]. Tür, ruh hali, sanatçının şarkıları veya "biraz müzik" → liste, örn. "biraz Türkçe rock" → [[YOUTUBE: Türkçe rock karışık | liste]]; "sevdiğim şeylerden çal" → hafızadaki zevkine göre bir sorgu yaz.)
 [[SES: ac | kis]]   (çalan müziğin sesi)
+[[ARA: internette aranacak kısa sorgu]]   (güncel ya da bilmediğin bir bilgi gerektiğinde: fiyatlar, döviz, maç sonuçları, son dakika olaylar, "şu an kim", açılış saatleri, bir ürün/kişi/yer hakkında güncel bilgi, ya da kullanıcı "internette/Google'da ara" dediğinde. Kendi bilgin eski olabilir; emin değilsen ARA kullan. Bu durumda sadece "Hemen bakıyorum" de, cevabı sonuçlar gelince vereceksin.)
 SEN MÜZİK ÇALABİLİRSİN: YouTube üzerinden her şarkıyı çalabilirsin. Asla "müzik çalamıyorum" veya "başka bir uygulamadan aç" deme; her müzik isteğinde mutlaka [[YOUTUBE: …]] komutunu ekle.
 Müzik açarken sadece "Hemen açıyorum" gibi çok kısa bir cümle söyle.
 [[DOSYA_ARA: anahtar kelimeler | dosya türü | son kaç gün]]   (bilgisayardaki dosyayı bulmak için; tür örn. pdf, word, excel, foto, video, müzik; tür ve gün bilinmiyorsa boş bırak. Örn. "geçen ay indirdiğim kira sözleşmesi pdf'i" → [[DOSYA_ARA: kira sözleşmesi | pdf | 45]])
@@ -491,19 +527,25 @@ Bilmediğin şeyi uydurma. Google bağlı değilse mail ve görevler için sağ 
    KOMUT İŞLEME
    ========================================================= */
 let busy = false;
+let lastUserText = '';
 async function handleUser(text) {
   if (busy) return;
+  lastUserText = text;
   busy = true; stopRec(true);
   addLog('u', text);
   pushHistory('u', text);
   setState('thinking');
   let reply;
   try {
-    if (!hasBrain()) reply = await offlineBrain(text);
+    const ta = timeAnswer(text);
+    if (ta) reply = ta;
+    else if (!hasBrain()) reply = await offlineBrain(text);
     else {
-      const msgs = M.history.slice(-14).map(h => ({ role: h.r === 'u' ? 'user' : 'assistant', content: h.c }));
+      const msgs = M.history.slice(-14).map(h => ({ role: h.r === 'u' ? 'user' : 'assistant', content: h.r === 'u' ? msgStamp(h.t) + h.c : h.c }));
       const raw = await think(systemPrompt(text), msgs);
       reply = await runActions(raw);
+      // "Google'da ara" dendiği halde yapay zeka arama komutu vermezse
+      if (searchIntent(text) && !/\[\[\s*ARA/i.test(raw)) { pending.push(() => webAnswer(searchQuery(text), text)); reply = 'Hemen bakıyorum.'; }
       // Yapay zeka müzik komutunu unutursa isteği Jarvis kendisi yakalar
       if (musicIntent(text) && !/\[\[\s*YOUTUBE/i.test(raw) && !/\[\[\s*MUZIK/i.test(raw)) {
         const q = musicQuery(text);
@@ -546,6 +588,7 @@ async function runActions(raw) {
         case 'MUZIK': music(arg.toLowerCase().replace('ö', 'o')); break;
         case 'YOUTUBE': { const [q, k] = arg.split('|').map(x => (x || '').trim().toLowerCase()); pending.push(() => playYouTube(arg.split('|')[0].trim(), /liste/.test(k || '') ? 'liste' : 'sarki')); break; }
         case 'SES': ytVolume(/a[cç]/.test(arg.toLowerCase()) ? 'ac' : 'kis'); break;
+        case 'ARA': { const q = arg, ut = lastUserText; pending.push(() => webAnswer(q, ut)); break; }
         case 'DOSYA_ARA': { const [q, ft, d] = arg.split('|').map(x => (x || '').trim()); pending.push(() => fileSearch(q, ft, parseInt(d) || 0)); break; }
         case 'DOSYA_GONDER': pending.push(() => fileSend(parseInt(arg) || 1)); break;
       }
@@ -576,6 +619,7 @@ async function offlineBrain(t) {
   const s = t.toLocaleLowerCase('tr');
   const h = M.profile.hitap || 'efendim';
   if (/sonraki|geç|atla/.test(s) && /şarkı|parça|müzik/.test(s)) { music('sonraki'); return 'Sıradaki parçaya geçiyorum.'; }
+  if (searchIntent(t)) { pending.push(() => webAnswer(searchQuery(t), t)); return 'Hemen bakıyorum.'; }
   if (musicIntent(t)) { const q = musicQuery(t); pending.push(() => playYouTube(q.query, q.kind)); return 'Hemen açıyorum.'; }
   if (/önceki/.test(s) && /şarkı|parça/.test(s)) { music('onceki'); return 'Önceki parçaya dönüyorum.'; }
   if (/durdur|duraklat|devam et|oynat/.test(s)) { music('oynat'); return 'Müzik komutunu ilettim.'; }
@@ -764,6 +808,97 @@ function ytVolume(dir) {
   ytPlayer?.setVolume?.(ytVol);
 }
 
+
+/* =========================================================
+   İNTERNETTE ARAMA — Tavily (ücretsiz 1000/ay) › PC ajanı üzerinden Tavily
+   › Vikipedi › "Google'da aç" düğmesi
+   ========================================================= */
+function searchIntent(t) {
+  const s = t.toLocaleLowerCase('tr');
+  if (/araştır/.test(s)) return true;                                     // "araştır", "araştırır mısın"
+  const where = /(google|internet|web(?!cam)|online|çevrimiçi)/.test(s);   // "annemi ara" telefon etmek demek; tek başına arama sayılmaz
+  return where && /(^|\s)(ara|arar|arasana|bak|bakar|baksana|bul|bulur|sorgula)(\s|$|[.!?,]|\s?(mısın|misin|bakalım))/.test(s);
+}
+function searchQuery(t) {
+  let q = t.replace(/(^|\s)(jarvis|lütfen|bana|bir|google'?(da|dan|la|a)?|internette|internetten|internete|webde|ara|arar|arasana|mısın|misin|araştır|araştırır|araştırsana|bak|bakar|baksana|bakalım|bakabilir|hakkında|sorgula)(?=\s|$|[.!?,])/giu, ' ')
+    .replace(/[?.!,]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!q || /^(bunu|şunu|onu|bunları|şunları)$/i.test(q)) {           // "bunu araştır" → önceki sorunu ara
+    const prev = M.history.filter(h => h.r === 'u').slice(-2, -1)[0];
+    q = prev ? prev.c : t;
+  }
+  return q;
+}
+
+async function tavilySearch(q) {
+  const body = { query: q, search_depth: 'basic', max_results: 5, include_answer: true, topic: 'general' };
+  try {
+    const j = await fetchJSON('https://api.tavily.com/search', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + S.tavilyKey }, body: JSON.stringify(body) }, 20000);
+    return { answer: j.answer || '', results: (j.results || []).map(r => ({ title: r.title, url: r.url, text: (r.content || '').slice(0, 700) })), via: 'Tavily' };
+  } catch (e) {
+    // tarayıcı engellediyse (CORS / ağ) aramayı PC ajanı yapsın
+    if (e instanceof TypeError && agentOnline()) {
+      const r = await agentCmd('websearch', { query: q, key: S.tavilyKey }, 30000);
+      return { answer: r.answer || '', results: r.results || [], via: 'Tavily (PC)' };
+    }
+    throw e;
+  }
+}
+async function wikiSearch(q) {
+  const s = await fetchJSON(`https://tr.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&srlimit=3&format=json&origin=*`, {}, 12000);
+  const hits = s.query?.search || [];
+  const out = [];
+  for (const h of hits.slice(0, 2)) {
+    try {
+      const p = await fetchJSON(`https://tr.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(h.title.replace(/ /g, '_'))}`, {}, 12000);
+      if (p.extract) out.push({ title: p.title, url: p.content_urls?.desktop?.page || '', text: p.extract.slice(0, 900) });
+    } catch {}
+  }
+  return { answer: '', results: out, via: 'Vikipedi' };
+}
+
+async function webSearch(q) {
+  const errs = [];
+  if (S.tavilyKey) { try { const r = await tavilySearch(q); if (r.results.length || r.answer) return r; } catch (e) { errs.push('Tavily: ' + e.message); } }
+  try { const r = await wikiSearch(q); if (r.results.length) return r; } catch (e) { errs.push('Vikipedi: ' + e.message); }
+  if (errs.length) console.warn('arama', errs);
+  return { answer: '', results: [], via: '', errs };
+}
+
+function addSources(res, q) {
+  const el = document.createElement('div'); el.className = 'msg sys';
+  const g = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+  el.innerHTML = '🔎 ' + (res.results.length ? `${esc(res.via)}: ` + res.results.slice(0, 3).map(r => {
+    let host = ''; try { host = new URL(r.url).hostname.replace(/^www\./, ''); } catch {}
+    return `<a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--c2)">${esc(host || r.title)}</a>`;
+  }).join(' · ') + ' · ' : '') + `<a href="${esc(g)}" target="_blank" rel="noopener" style="color:var(--a)">GOOGLE'DA AÇ ↗</a>`;
+  const log = $('#log'); log.appendChild(el); log.scrollTop = log.scrollHeight;
+}
+
+async function webAnswer(q, userText) {
+  q = (q || '').trim(); if (!q) return;
+  const h = M.profile.hitap || 'efendim';
+  setState('thinking', 'İNTERNETTE ARANIYOR');
+  const res = await webSearch(q);
+  addSources(res, q);
+  if (!res.results.length && !res.answer) {
+    setState('idle');
+    return say(S.tavilyKey ? `İnternette buna dair bir sonuç bulamadım, ${h}. Google'da açmak için ekrandaki bağlantıya dokunabilirsiniz.`
+      : `Bunu internette aramam için ayarlara ücretsiz bir Tavily anahtarı eklemeniz gerekiyor, ${h}. Şimdilik ekrandaki bağlantıyla Google'da açabilirsiniz.`);
+  }
+  const ctx = (res.answer ? `Hızlı özet: ${res.answer}\n` : '') + res.results.map((r, i) => `[${i + 1}] ${r.title} (${r.url})\n${r.text}`).join('\n\n');
+  if (!hasBrain()) { setState('idle'); return say(res.answer || res.results[0].text.split(/(?<=[.!?])\s/).slice(0, 2).join(' ')); }
+  const sys = systemPrompt(userText) + `
+
+İNTERNET ARAMA SONUÇLARI (${res.via}, sorgu: "${q}", ${longDate(new Date())} ${clock(new Date())} itibarıyla):
+${ctx}
+
+Kullanıcının sorusunu SADECE bu sonuçlara dayanarak, sesli okunacak şekilde 1-4 kısa cümleyle cevapla. Sayıları ve tarihleri sonuçlardaki gibi ver. Sonuçlar çelişiyorsa ya da cevap içlerinde yoksa bunu açıkça söyle, uydurma. Siyasi konularda tarafsız kal. Kaynağı kısaca an ("… sitesine göre"). Bu cevapta hiçbir [[ ]] komutu kullanma.`;
+  try {
+    const out = (await think(sys, [{ role: 'user', content: msgStamp(Date.now()) + (userText || q) }])).replace(/\[\[[^\]]*\]\]/g, '').replace(/[*#_`>]/g, '').trim();
+    setState('idle'); await say(out);
+  } catch (e) { setState('idle'); await say(res.answer || 'Sonuçları özetlerken bir sorun oldu; ekrandaki kaynaklara bakabilirsiniz.'); }
+}
+
 /* =========================================================
    GOOGLE — giriş, Gmail, Tasks, Drive senkron
    ========================================================= */
@@ -877,7 +1012,7 @@ async function loadTasks() {
 }
 function renderTasks() {
   $('#nTask').textContent = tasks.length;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = ymd(new Date());
   $('#tasks').innerHTML = tasks.length ? tasks.map((t, i) => `
     <div class="task" style="animation-delay:${i * 50}ms"><button class="ck" data-id="${t.id}" title="Tamamlandı"></button>
       <div><div class="t">${esc(t.title)}</div>${t.due ? `<div class="d" style="${t.due < today ? 'color:var(--r)' : ''}">◷ ${new Date(t.due + 'T12:00').toLocaleDateString('tr-TR', { day: 'numeric', month: 'long' })}${t.due < today ? ' · GECİKTİ' : ''}</div>` : ''}</div>
@@ -1305,7 +1440,7 @@ function fillSettings() {
   $('#kGem').value = S.geminiKey; $('#kGroq').value = S.groqKey; $('#kOr').value = S.orKey;
   $('#mGem').value = S.geminiModel; $('#mGroq').value = S.groqModel; $('#mOr').value = S.orModel;
   $('#sCid').value = S.clientId; $('#sDev').value = S.deviceName; $('#sRate').value = S.rate; $('#sWake').value = S.wake ? '1' : '0';
-  $('#sVoice').value = S.voice; if ($('#kYt')) { $('#kYt').value = S.ytKey || ''; $('#sYtMode').value = S.ytMode || 'auto'; }
+  $('#sVoice').value = S.voice; if ($('#kTav')) $('#kTav').value = S.tavilyKey || ''; if ($('#kYt')) { $('#kYt').value = S.ytKey || ''; $('#sYtMode').value = S.ytMode || 'auto'; }
 }
 function openSettings() { fillSettings(); renderFacts(); loadVoices(); $('#settings').classList.add('open'); }
 $('#setBtn').onclick = openSettings;
@@ -1319,6 +1454,7 @@ function readSettings() {
     geminiKey: $('#kGem').value.trim(), groqKey: $('#kGroq').value.trim(), orKey: $('#kOr').value.trim(),
     geminiModel: $('#mGem').value.trim() || DEFAULTS.geminiModel, groqModel: $('#mGroq').value.trim() || DEFAULTS.groqModel, orModel: $('#mOr').value.trim() || DEFAULTS.orModel,
     clientId: $('#sCid').value.trim(), deviceName: $('#sDev').value.trim() || DEFAULTS.deviceName,
+    tavilyKey: $('#kTav') ? $('#kTav').value.trim() : S.tavilyKey,
     ytKey: $('#kYt') ? $('#kYt').value.trim() : S.ytKey, ytMode: $('#sYtMode') ? $('#sYtMode').value : S.ytMode,
     voice: $('#sVoice').value, rate: +$('#sRate').value || 1, wake: $('#sWake').value === '1'
   });
@@ -1337,7 +1473,8 @@ $('#sSave').onclick = () => {
    ========================================================= */
 async function bootSequence() {
   const lines = [
-    ['ÇEKİRDEK SİSTEMLER · SÜRÜM ' + JARVIS_VERSION + ($('#kYt') ? '' : ' (index.html ESKİ!)'), $('#kYt') ? 'TAMAM' : 'GÜNCELLE'],
+    ['ÇEKİRDEK SİSTEMLER · SÜRÜM ' + JARVIS_VERSION + ($('#kTav') ? '' : ' (index.html ESKİ!)'), $('#kTav') ? 'TAMAM' : 'GÜNCELLE'],
+    ['İNTERNET ARAMA', S.tavilyKey ? 'TAVILY' : 'VİKİPEDİ'],
     ['SES SENTEZİ · TÜRKÇE', 'speechSynthesis' in window ? 'TAMAM' : 'YOK'],
     ['KONUŞMA TANIMA', SR ? 'TAMAM' : 'KLAVYE'],
     ['BEYİN YÖNLENDİRİCİ', hasBrain() ? providers().map(p => p.name).join(' › ').toUpperCase() : 'YEREL MOD'],
