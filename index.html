@@ -194,6 +194,11 @@ footer{padding-top:10px}
 #yt.app .ytOpen{display:block}
 #yt.app [data-yt=prev],#yt.app [data-yt=toggle],#yt.app [data-yt=next]{display:none}
 #yt.playing .ytNow::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff4d4d;margin-right:6px;animation:breath 1s infinite;box-shadow:0 0 6px #ff4d4d}
+#docv{position:fixed;inset:0;z-index:55;background:rgba(1,5,9,.88);display:none;align-items:center;justify-content:center;padding:calc(var(--st) + 12px) 12px calc(var(--sb) + 12px)}
+#docv.open{display:flex}
+.docsheet{width:min(820px,100%)}
+#docBody{background:#fff;margin-top:10px;padding:18px 14px;max-height:62vh;overflow:auto;border:1px solid var(--line)}
+.btn:disabled{opacity:.35}
 #toast{position:fixed;left:50%;top:calc(var(--st) + 14px);transform:translate(-50%,-140%);z-index:60;background:#041019;border:1px solid var(--a);color:var(--a);padding:10px 16px;font-size:14px;transition:transform .35s,visibility .35s;max-width:90vw;visibility:hidden}
 #toast.on{visibility:visible}
 #toast.on{transform:translate(-50%,0)}
@@ -270,6 +275,7 @@ footer{padding-top:10px}
       <button class="q" data-cmd="WhatsApp'ta bakmadığım mesajlar var mı?">▸ WHATSAPP</button>
       <button class="q" data-cmd="Spor ve siyaset gündemini özetle">▸ HABERLER</button>
       <button class="q" data-cmd="Bugün dolar ve euro kaç TL, internette bak">▸ DÖVİZ</button>
+      <button class="q" data-cmd="Son konuştuğumuz konuyu PDF yap">▸ PDF YAP</button>
       <button class="q" id="qFiles">▸ DOSYA BUL</button>
       <button class="q" data-cmd="Okumadığım ve unuttuğum şeyleri hatırlat">▸ UNUTTUKLARIM</button>
       <button class="q m" data-cmd="Bana biraz müzik çal">▸ MÜZİK</button>
@@ -291,7 +297,7 @@ footer{padding-top:10px}
 
 <div id="settings">
   <div class="sheet">
-    <h2>◆ SİSTEM AYARLARI <span style="font-size:10px;color:var(--dim)">· SÜRÜM 11</span></h2>
+    <h2>◆ SİSTEM AYARLARI <span style="font-size:10px;color:var(--dim)">· SÜRÜM 12</span></h2>
     <div class="hint">Anahtarlar yalnızca bu cihazda saklanır. Profil ve hafıza Google Drive'ınızdaki gizli uygulama klasörü üzerinden diğer cihazlarla paylaşılır.</div>
 
     <h4>SİZİ TANIYAYIM</h4>
@@ -360,9 +366,22 @@ footer{padding-top:10px}
     <div class="act"><button class="btn" id="fClose">KAPAT</button></div>
   </div>
 </div>
+<div id="docv">
+  <div class="sheet docsheet">
+    <h2>◆ BELGE <span id="docState" style="font-size:10px;color:var(--g);letter-spacing:.15em"></span></h2>
+    <div id="docTitle" class="hint" style="font-size:15px;color:var(--c2)"></div>
+    <div id="docBody"></div>
+    <div class="act">
+      <button class="btn" id="docClose">KAPAT</button>
+      <button class="btn" id="docPrint">YAZDIR</button>
+      <button class="btn" id="docDl">İNDİR</button>
+      <button class="btn p" id="docShare">PAYLAŞ / KAYDET</button>
+    </div>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="app.js?v=11"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

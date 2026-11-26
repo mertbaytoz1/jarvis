@@ -3,7 +3,7 @@
    Tek dosyalık istemci uygulaması. Sunucu gerekmez.
    ========================================================= */
 'use strict';
-const JARVIS_VERSION = '11';
+const JARVIS_VERSION = '12';
 
 /* ---------- yardımcılar ---------- */
 const $ = s => document.querySelector(s);
@@ -475,7 +475,9 @@ function systemPrompt(userText = '') {
 
 Sen JARVIS'sin: ${p.name || 'kullanıcının'} kişisel yapay zeka asistanısın. Kullanıcıya "${p.hitap || 'efendim'}" diye hitap et.
 Kişiliğin: sakin, zeki, son derece kibar, ince ve kuru bir espri anlayışı olan sadık bir asistan. Her zaman Türkçe konuş.
-Cevapların SESLİ okunacak: markdown, yıldız, emoji, madde işareti, link kullanma. Genelde 1-3 kısa cümle; brifing ve mail okumada en fazla 6 cümle.
+Cevapların SESLİ okunacak: markdown, yıldız, emoji, madde işareti, link kullanma.
+Cevap uzunluğu: günlük işlerde (görev, müzik, mail, selamlaşma) 1-3 kısa cümle; brifingde en fazla 10 cümle.
+BİLGİ SORULARINDA ("X kimdir", "Y nedir", "anlat", "açıkla", "farkı ne", "nasıl çalışır", felsefe, tarih, bilim, edebiyat, din, sanat, genel kültür) bilgili bir hoca gibi doyurucu ve doğru anlat: 6-12 cümle, akıcı paragraflar; birden fazla madde varsa "Birincisi…, İkincisi…" diye sırala ve her birini birer cümleyle açıkla. Kullanıcı "detaylı/uzun anlat" derse 15-20 cümleye çıkabilirsin. Bu tür kalıcı, genel bilgiler için internette arama gerekmez; kendi bilginle cevap ver ama emin olmadığın ayrıntıyı (tarih, rakam) uydurma.
 Konuştuğun cihaz: ${S.deviceName}.
 
 KULLANICI HAKKINDA:
@@ -510,6 +512,7 @@ EYLEMLER: Bir iş yapman gerektiğinde cevabının EN SONUNA, her biri ayrı sat
 [[MUZIK: sonraki | onceki | oynat | durdur]]
 [[YOUTUBE: arama sorgusu | sarki veya liste]]   (kullanıcı müzik/şarkı/sanatçı/video çalmak istediğinde. Belirli bir şarkı → sarki, örn. "Duman'dan Bu Akşam'ı çal" → [[YOUTUBE: Duman Bu Akşam | sarki]]. Tür, ruh hali, sanatçının şarkıları veya "biraz müzik" → liste, örn. "biraz Türkçe rock" → [[YOUTUBE: Türkçe rock karışık | liste]]; "sevdiğim şeylerden çal" → hafızadaki zevkine göre bir sorgu yaz.)
 [[SES: ac | kis]]   (çalan müziğin sesi)
+[[PDF: belge başlığı | belgenin neyi kapsayacağı]]   (kullanıcı PDF, belge, doküman, rapor, ders notu, özet dosyası istediğinde. "Bunu PDF yap" derse son konuştuğunuz konuyu kullan. Bu durumda sadece "Hemen hazırlıyorum" de; belgeyi sistem ayrıca yazacak.)
 [[ARA: internette aranacak kısa sorgu]]   (güncel ya da bilmediğin bir bilgi gerektiğinde: fiyatlar, döviz, maç sonuçları, son dakika olaylar, "şu an kim", açılış saatleri, bir ürün/kişi/yer hakkında güncel bilgi, ya da kullanıcı "internette/Google'da ara" dediğinde. Kendi bilgin eski olabilir; emin değilsen ARA kullan. Bu durumda sadece "Hemen bakıyorum" de, cevabı sonuçlar gelince vereceksin.)
 SEN MÜZİK ÇALABİLİRSİN: YouTube üzerinden her şarkıyı çalabilirsin. Asla "müzik çalamıyorum" veya "başka bir uygulamadan aç" deme; her müzik isteğinde mutlaka [[YOUTUBE: …]] komutunu ekle.
 Müzik açarken sadece "Hemen açıyorum" gibi çok kısa bir cümle söyle.
@@ -544,6 +547,8 @@ async function handleUser(text) {
       const msgs = M.history.slice(-14).map(h => ({ role: h.r === 'u' ? 'user' : 'assistant', content: h.r === 'u' ? msgStamp(h.t) + h.c : h.c }));
       const raw = await think(systemPrompt(text), msgs);
       reply = await runActions(raw);
+      // PDF istendiği halde yapay zeka komutu vermezse
+      if (pdfIntent(text) && !/\[\[\s*PDF/i.test(raw)) { pending.push(() => makePdf('', '', text)); reply = 'Hemen hazırlıyorum.'; }
       // "Google'da ara" dendiği halde yapay zeka arama komutu vermezse
       if (searchIntent(text) && !/\[\[\s*ARA/i.test(raw)) { pending.push(() => webAnswer(searchQuery(text), text)); reply = 'Hemen bakıyorum.'; }
       // Yapay zeka müzik komutunu unutursa isteği Jarvis kendisi yakalar
@@ -588,6 +593,7 @@ async function runActions(raw) {
         case 'MUZIK': music(arg.toLowerCase().replace('ö', 'o')); break;
         case 'YOUTUBE': { const [q, k] = arg.split('|').map(x => (x || '').trim().toLowerCase()); pending.push(() => playYouTube(arg.split('|')[0].trim(), /liste/.test(k || '') ? 'liste' : 'sarki')); break; }
         case 'SES': ytVolume(/a[cç]/.test(arg.toLowerCase()) ? 'ac' : 'kis'); break;
+        case 'PDF': { const [ti, br] = arg.split('|').map(x => (x || '').trim()), ut = lastUserText; pending.push(() => makePdf(ti, br, ut)); break; }
         case 'ARA': { const q = arg, ut = lastUserText; pending.push(() => webAnswer(q, ut)); break; }
         case 'DOSYA_ARA': { const [q, ft, d] = arg.split('|').map(x => (x || '').trim()); pending.push(() => fileSearch(q, ft, parseInt(d) || 0)); break; }
         case 'DOSYA_GONDER': pending.push(() => fileSend(parseInt(arg) || 1)); break;
@@ -619,6 +625,7 @@ async function offlineBrain(t) {
   const s = t.toLocaleLowerCase('tr');
   const h = M.profile.hitap || 'efendim';
   if (/sonraki|geç|atla/.test(s) && /şarkı|parça|müzik/.test(s)) { music('sonraki'); return 'Sıradaki parçaya geçiyorum.'; }
+  if (pdfIntent(t)) { pending.push(() => makePdf('', '', t)); return 'Hemen hazırlıyorum.'; }
   if (searchIntent(t)) { pending.push(() => webAnswer(searchQuery(t), t)); return 'Hemen bakıyorum.'; }
   if (musicIntent(t)) { const q = musicQuery(t); pending.push(() => playYouTube(q.query, q.kind)); return 'Hemen açıyorum.'; }
   if (/önceki/.test(s) && /şarkı|parça/.test(s)) { music('onceki'); return 'Önceki parçaya dönüyorum.'; }
@@ -808,6 +815,144 @@ function ytVolume(dir) {
   ytPlayer?.setVolume?.(ytVol);
 }
 
+
+
+/* =========================================================
+   BELGE / PDF — Jarvis konuyu başlıklı bir belge olarak yazar,
+   PDF'e çevirir; iPhone'da Paylaş (Dosyalar'a kaydet / WhatsApp), PC'de indir
+   ========================================================= */
+function pdfIntent(t) {
+  const s = t.toLocaleLowerCase('tr');
+  return /pdf/.test(s) || /(belge|doküman|döküman|rapor|ders notu|not dosyası)\s*(olarak\s*)?(hazırla|yap|oluştur|çıkar|yaz|ver)/.test(s);
+}
+let pdfLib = null;
+function loadPdfLib() {
+  if (window.html2pdf) return Promise.resolve();
+  if (pdfLib) return pdfLib;
+  pdfLib = new Promise((res, rej) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.2/dist/html2pdf.bundle.min.js';
+    sc.onload = () => res(); sc.onerror = () => { pdfLib = null; rej(new Error('PDF kütüphanesi yüklenemedi')); };
+    document.head.appendChild(sc);
+  });
+  return pdfLib;
+}
+// basit ve güvenli markdown → HTML (başlık, madde, numara, kalın, italik, alıntı)
+function mdToHtml(md) {
+  const inline = t => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|[\s(])\*(?!\s)(.+?)\*(?=[\s).,;:!?]|$)/g, '$1<i>$2</i>');
+  const out = []; let list = null;
+  const close = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  md.replace(/\r/g, '').split('\n').forEach(line => {
+    const l = line.trim();
+    let m;
+    if (!l) { close(); return; }
+    if ((m = l.match(/^(#{1,4})\s+(.*)$/))) { close(); const n = Math.min(m[1].length, 3); out.push(`<h${n}>${inline(m[2])}</h${n}>`); return; }
+    if ((m = l.match(/^[-*•]\s+(.*)$/))) { if (list !== 'ul') { close(); out.push('<ul>'); list = 'ul'; } out.push(`<li>${inline(m[1])}</li>`); return; }
+    if ((m = l.match(/^\d+[.)]\s+(.*)$/))) { if (list !== 'ol') { close(); out.push('<ol>'); list = 'ol'; } out.push(`<li>${inline(m[1])}</li>`); return; }
+    if ((m = l.match(/^>\s?(.*)$/))) { close(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); return; }
+    close(); out.push(`<p>${inline(l)}</p>`);
+  });
+  close();
+  return out.join('\n');
+}
+const DOC_CSS = `
+.jdoc{width:720px;padding:8px 6px;color:#14202b;background:#fff;font-family:Georgia,'Times New Roman',serif;font-size:13.5px;line-height:1.62}
+.jdoc .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #0b8fa3;padding-bottom:8px;margin-bottom:18px;font-family:Arial,sans-serif}
+.jdoc .hd b{letter-spacing:.35em;color:#0b8fa3;font-size:12px}.jdoc .hd span{font-size:10.5px;color:#6b7c88}
+.jdoc h1{font-family:Arial,sans-serif;font-size:25px;line-height:1.25;margin:0 0 14px;color:#0a2533}
+.jdoc h2{font-family:Arial,sans-serif;font-size:17px;margin:20px 0 7px;color:#0b6f80;border-left:4px solid #0b8fa3;padding-left:9px}
+.jdoc h3{font-family:Arial,sans-serif;font-size:14.5px;margin:14px 0 5px;color:#163646}
+.jdoc p{margin:0 0 9px;text-align:justify}.jdoc ul,.jdoc ol{margin:0 0 10px 22px;padding:0}.jdoc li{margin:0 0 4px}
+.jdoc blockquote{margin:8px 0 10px;padding:7px 12px;border-left:3px solid #c8d6de;background:#f3f7f9;color:#33495a;font-style:italic}
+.jdoc .ft{margin-top:22px;border-top:1px solid #d5e0e6;padding-top:6px;font-family:Arial,sans-serif;font-size:9.5px;color:#8798a4}
+.jdoc h1,.jdoc h2,.jdoc h3{page-break-after:avoid;break-after:avoid;letter-spacing:normal;text-transform:none;text-shadow:none;display:block}.jdoc li,.jdoc blockquote{page-break-inside:avoid;break-inside:avoid}`;
+
+function docHtml(md) {
+  let body = mdToHtml(md);
+  if (!/<h1>/.test(body)) body = `<h1>${esc(lastDoc.title)}</h1>` + body;
+  return `<div class="jdoc"><div class="hd"><b>J.A.R.V.I.S</b><span>${esc(longDate(new Date()))} · ${esc(M.profile.name || '')}</span></div>${body}
+    <div class="ft">Bu belge Jarvis tarafından yapay zeka ile hazırlanmıştır; önemli bilgileri bir kaynaktan doğrulayınız.</div></div>`;
+}
+
+let lastDoc = { title: '', md: '', blob: null, file: '' };
+const fileSafe = t => (t || 'Jarvis belgesi').replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+
+async function makePdf(title, brief, userText) {
+  const h = M.profile.hitap || 'efendim';
+  if (!hasBrain()) return say(`Belge yazabilmem için ayarlara bir yapay zeka anahtarı eklemeniz gerekiyor, ${h}.`);
+  setState('thinking', 'BELGE YAZILIYOR');
+  const recent = M.history.slice(-8).map(x => ({ role: x.r === 'u' ? 'user' : 'assistant', content: x.c }));
+  const sys = `${timeBlock()}
+
+Sen JARVIS'sin ve ${M.profile.name || 'kullanıcı'} için Türkçe, düzgün, bilgilendirici bir BELGE yazıyorsun. Bu belge PDF olacak, sesli okunmayacak.
+${title ? 'Belge başlığı: ' + title : 'Başlığı konuşmadan çıkar.'}
+${brief ? 'Kapsam: ' + brief : 'Kapsam: kullanıcının son isteği; "bunu/bunları PDF yap" diyorsa son konuşulan konu.'}
+BİÇİM (sadece bu işaretleri kullan): ilk satır "# Başlık"; bölümler "## "; alt bölümler "### "; maddeler "- "; numaralı liste "1. "; önemli terimler **kalın**; alıntı "> ".
+İÇERİK: kısa bir giriş, konuya uygun 3-7 ana bölüm, gerekirse karşılaştırma ya da önemli kavramlar listesi, kısa bir sonuç. 700-1500 kelime. Doğru ve dengeli ol; tartışmalı konularda farklı görüşleri adil yansıt. Emin olmadığın tarih, rakam ya da alıntıyı uydurma; uydurma kaynak listesi ekleme.
+Sadece belgenin kendisini yaz; öncesine ya da sonrasına açıklama, [[ ]] komutu veya kod bloğu ekleme.`;
+  let md;
+  try { md = await think(sys, [...recent, { role: 'user', content: msgStamp(Date.now()) + (userText || title || 'Bu konuyu PDF yap') }]); }
+  catch (e) { setState('idle'); return say('Belgeyi yazarken bir sorun oldu: ' + e.message.slice(0, 120)); }
+  md = md.replace(/^```(?:markdown|md)?\s*|```\s*$/g, '').replace(/\[\[[^\]]*\]\]/g, '').trim();
+  const t1 = (md.match(/^#\s+(.+)$/m) || [])[1] || title || 'Jarvis belgesi';
+  lastDoc = { title: t1.replace(/\*\*/g, ''), md, blob: null, file: fileSafe(t1.replace(/\*\*/g, '')) + '.pdf' };
+  setState('thinking', 'PDF OLUŞTURULUYOR');
+  showDoc();
+  try {
+    await loadPdfLib();
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;left:-10000px;top:0;background:#fff';
+    wrap.innerHTML = `<style>${DOC_CSS}</style>` + docHtml(md);
+    document.body.appendChild(wrap);
+    lastDoc.blob = await html2pdf().set({
+      margin: [12, 12, 14, 12], filename: lastDoc.file,
+      image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2, backgroundColor: '#ffffff', useCORS: true },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, pagebreak: { mode: ['css', 'legacy'], avoid: ['h1', 'h2', 'h3', 'li', 'blockquote'] }
+    }).from(wrap.querySelector('.jdoc')).outputPdf('blob');
+    wrap.remove();
+  } catch (e) {
+    console.warn('pdf', e);
+    addLog('sys', 'PDF dosyası oluşturulamadı (' + e.message + '); YAZDIR düğmesiyle PDF olarak kaydedebilirsiniz.');
+  }
+  showDoc();
+  setState('idle');
+  pushHistory('j', `(PDF belge hazırlandı: "${lastDoc.title}")`);
+  await say(`"${lastDoc.title}" belgesi hazır, ${h}. ${isIOS ? 'Paylaş düğmesiyle Dosyalar\'a kaydedebilir ya da gönderebilirsiniz.' : 'İndir düğmesiyle bilgisayarınıza kaydedebilirsiniz.'}`);
+}
+
+function showDoc() {
+  const ov = $('#docv');
+  $('#docTitle').textContent = lastDoc.title || 'Belge';
+  $('#docBody').innerHTML = `<style>${DOC_CSS}.jdoc{width:auto;max-width:720px;margin:0 auto}</style>` + (lastDoc.md ? docHtml(lastDoc.md) : '');
+  const ready = !!lastDoc.blob;
+  $('#docState').textContent = ready ? `PDF HAZIR · ${(lastDoc.blob.size / 1024).toFixed(0)} KB` : (lastDoc.md ? 'PDF OLUŞTURULUYOR…' : '');
+  $('#docShare').disabled = !ready; $('#docDl').disabled = !ready;
+  ov.classList.add('open');
+}
+async function shareDoc() {
+  if (!lastDoc.blob) return;
+  const file = new File([lastDoc.blob], lastDoc.file, { type: 'application/pdf' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: lastDoc.title }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  downloadDoc();
+}
+function downloadDoc() {
+  if (!lastDoc.blob) return;
+  const url = URL.createObjectURL(lastDoc.blob);
+  const a = document.createElement('a'); a.href = url; a.download = lastDoc.file; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+function printDoc() {
+  const w = window.open('', '_blank');
+  if (!w) return toast('Açılır pencere engellendi.');
+  w.document.write(`<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><title>${esc(lastDoc.title)}</title><style>${DOC_CSS}body{margin:0}.jdoc{width:auto}@page{size:A4;margin:14mm}</style></head><body>${docHtml(lastDoc.md)}</body></html>`);
+  w.document.close(); setTimeout(() => w.print(), 400);
+}
+$('#docShare').onclick = shareDoc;
+$('#docDl').onclick = downloadDoc;
+$('#docPrint').onclick = printDoc;
+$('#docClose').onclick = () => $('#docv').classList.remove('open');
 
 /* =========================================================
    İNTERNETTE ARAMA — Tavily (ücretsiz 1000/ay) › PC ajanı üzerinden Tavily
@@ -1475,6 +1620,7 @@ async function bootSequence() {
   const lines = [
     ['ÇEKİRDEK SİSTEMLER · SÜRÜM ' + JARVIS_VERSION + ($('#kTav') ? '' : ' (index.html ESKİ!)'), $('#kTav') ? 'TAMAM' : 'GÜNCELLE'],
     ['İNTERNET ARAMA', S.tavilyKey ? 'TAVILY' : 'VİKİPEDİ'],
+    ['BELGE / PDF MODÜLÜ', $('#docv') ? 'TAMAM' : 'GÜNCELLE'],
     ['SES SENTEZİ · TÜRKÇE', 'speechSynthesis' in window ? 'TAMAM' : 'YOK'],
     ['KONUŞMA TANIMA', SR ? 'TAMAM' : 'KLAVYE'],
     ['BEYİN YÖNLENDİRİCİ', hasBrain() ? providers().map(p => p.name).join(' › ').toUpperCase() : 'YEREL MOD'],
