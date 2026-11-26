@@ -18,13 +18,16 @@ const decodeHtml = s => { const t = document.createElement('textarea'); t.innerH
 /* ---------- ayarlar (yalnız bu cihaz) ---------- */
 const DEFAULTS = {
   geminiKey: '', groqKey: '', orKey: '',
-  geminiModel: 'gemini-2.5-flash',
-  groqModel: 'llama-3.3-70b-versatile',
-  orModel: 'meta-llama/llama-3.3-70b-instruct:free',
+  geminiModel: 'gemini-3.8-flash',
+  groqModel: 'openai/gpt-oss-120b',
+  orModel: 'openrouter/free',
   clientId: '', deviceName: isIOS ? (/iPad/.test(navigator.userAgent) || navigator.maxTouchPoints > 1 && !/iPhone/.test(navigator.userAgent) ? 'iPad' : 'iPhone') : 'Bilgisayar',
   voice: '', rate: 1.0, wake: false, deviceId: uid(), googleWanted: false
 };
 const S = Object.assign({}, DEFAULTS, load('jarvis.settings', {}));
+// kapatılmış eski varsayılan modelleri güncelle
+const RETIRED = { geminiModel: ['gemini-2.5-flash', 'gemini-2.0-flash'], groqModel: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'], orModel: ['meta-llama/llama-3.3-70b-instruct:free'] };
+Object.entries(RETIRED).forEach(([k, old]) => { if (old.includes(S[k])) S[k] = DEFAULTS[k]; });
 save('jarvis.settings', S);
 
 /* ---------- hafıza (cihazlar arası senkron) ---------- */
@@ -337,9 +340,9 @@ const hasBrain = () => !!(S.geminiKey || S.groqKey || S.orKey);
 
 function providers() {
   const list = [];
-  if (S.geminiKey) list.push({ name: 'Gemini', call: callGemini });
-  if (S.groqKey) list.push({ name: 'Groq', call: (s, m) => callOpenAI('https://api.groq.com/openai/v1/chat/completions', S.groqKey, S.groqModel, s, m) });
-  if (S.orKey) list.push({ name: 'OpenRouter', call: (s, m) => callOpenAI('https://openrouter.ai/api/v1/chat/completions', S.orKey, S.orModel, s, m, { 'HTTP-Referer': location.origin, 'X-Title': 'Jarvis' }) });
+  if (S.geminiKey) list.push({ name: 'Gemini', mk: 'geminiModel', call: callGemini, discover: discoverGemini });
+  if (S.groqKey) list.push({ name: 'Groq', mk: 'groqModel', call: (s, m) => callOpenAI('https://api.groq.com/openai/v1/chat/completions', S.groqKey, S.groqModel, s, m), discover: discoverGroq });
+  if (S.orKey) list.push({ name: 'OpenRouter', mk: 'orModel', call: (s, m) => callOpenAI('https://openrouter.ai/api/v1/chat/completions', S.orKey, S.orModel, s, m, { 'HTTP-Referer': location.origin, 'X-Title': 'Jarvis' }), discover: discoverOpenRouter });
   return list;
 }
 
@@ -363,7 +366,7 @@ async function callGemini(sys, msgs) {
   if (contents[0]?.role !== 'user') contents.unshift({ role: 'user', parts: [{ text: '(oturum başladı)' }] });
   const j = await fetchJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.geminiModel)}:generateContent`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': S.geminiKey },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: sys }] }, contents, generationConfig: { temperature: .7, maxOutputTokens: 800 } })
+    body: JSON.stringify({ systemInstruction: { parts: [{ text: sys }] }, contents, generationConfig: { temperature: .7, maxOutputTokens: 4096 } })
   });
   const txt = j.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('').trim();
   if (!txt) throw new Error('boş cevap');
@@ -373,18 +376,51 @@ async function callGemini(sys, msgs) {
 async function callOpenAI(url, key, model, sys, msgs, extra = {}) {
   const j = await fetchJSON(url, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key, ...extra },
-    body: JSON.stringify({ model, temperature: .7, max_tokens: 800, messages: [{ role: 'system', content: sys }, ...msgs] })
+    body: JSON.stringify({ model, temperature: .7, max_tokens: 4096, ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}), messages: [{ role: 'system', content: sys }, ...msgs] })
   });
   const txt = j.choices?.[0]?.message?.content?.trim();
   if (!txt) throw new Error('boş cevap');
   return txt;
 }
 
+const MODEL_GONE = /404|not.?found|decommission|deprecat|does not exist|no longer|model_not_found|invalid model|not a valid model|not supported|unknown model|no endpoints/i;
+
+async function discoverGemini() {
+  const j = await fetchJSON('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': S.geminiKey } });
+  const ok = (j.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map(m => m.name.replace(/^models\//, '')).filter(n => !/image|tts|live|audio|embedding|robotics|computer|exp/i.test(n));
+  const ver = n => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [0, 0])[1]);
+  const rank = n => (/-flash$/.test(n) ? 3 : /-flash-lite$/.test(n) ? 2 : /flash/.test(n) && !/preview/.test(n) ? 1 : 0);
+  ok.sort((a, b) => rank(b) - rank(a) || ver(b) - ver(a));
+  return ok[0];
+}
+async function discoverGroq() {
+  const j = await fetchJSON('https://api.groq.com/openai/v1/models', { headers: { Authorization: 'Bearer ' + S.groqKey } });
+  const ids = (j.data || []).filter(m => m.active !== false).map(m => m.id).filter(i => !/whisper|guard|tts|orpheus|playai|compound/i.test(i));
+  return ['openai/gpt-oss-120b', 'qwen/qwen3.6-27b', 'openai/gpt-oss-20b'].find(i => ids.includes(i)) || ids.find(i => /gpt-oss|qwen|llama|kimi/i.test(i)) || ids[0];
+}
+async function discoverOpenRouter() {
+  const j = await fetchJSON('https://openrouter.ai/api/v1/models', {});
+  const ids = (j.data || []).map(m => m.id);
+  if (ids.includes('openrouter/free')) return 'openrouter/free';
+  const free = ids.filter(i => i.endsWith(':free'));
+  return free.find(i => /gpt-oss-120b/.test(i)) || free.find(i => /llama|qwen|gemma|deepseek|mistral/i.test(i)) || free[0];
+}
+
 async function think(sys, msgs) {
   const errs = [];
   for (const p of providers()) {
     try {
-      const out = await p.call(sys, msgs);
+      let out;
+      try { out = await p.call(sys, msgs); }
+      catch (e) {
+        if (!MODEL_GONE.test(e.message)) throw e;
+        const m = await p.discover().catch(() => null);
+        if (!m || m === S[p.mk]) throw e;
+        addLog('sys', `◆ ${p.name} modeli güncellendi: ${S[p.mk]} → ${m}`);
+        S[p.mk] = m; save('jarvis.settings', S);
+        out = await p.call(sys, msgs);
+      }
       if (activeBrain !== p.name) { activeBrain = p.name; refreshChips(); }
       return out;
     } catch (e) { errs.push(p.name + ': ' + e.message); console.warn(p.name, e); }
@@ -464,7 +500,7 @@ async function handleUser(text) {
   } catch (e) {
     console.error(e); fx.err();
     reply = 'Üzgünüm, beyin modüllerimin hiçbirine ulaşamadım. Anahtarları ve internet bağlantısını kontrol eder misiniz?';
-    addLog('sys', 'HATA: ' + e.message.slice(0, 160));
+    addLog('sys', 'HATA: ' + e.message.slice(0, 400));
   }
   busy = false;
   addLog('j', reply);
