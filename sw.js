@@ -1,5 +1,5 @@
 // Jarvis service worker: uygulama kabuğunu önbelleğe alır, API isteklerine dokunmaz.
-const CACHE = 'jarvis-v12';
+const CACHE = 'jarvis-v13';
 const SHELL = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

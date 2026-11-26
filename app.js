@@ -3,7 +3,7 @@
    Tek dosyalık istemci uygulaması. Sunucu gerekmez.
    ========================================================= */
 'use strict';
-const JARVIS_VERSION = '12';
+const JARVIS_VERSION = '13';
 
 /* ---------- yardımcılar ---------- */
 const $ = s => document.querySelector(s);
@@ -19,7 +19,7 @@ const decodeHtml = s => { const t = document.createElement('textarea'); t.innerH
 /* ---------- ayarlar (yalnız bu cihaz) ---------- */
 const DEFAULTS = {
   geminiKey: '', groqKey: '', orKey: '',
-  geminiModel: 'gemini-3.8-flash',
+  geminiModel: 'gemini-3.5-flash-lite',
   groqModel: 'openai/gpt-oss-120b',
   orModel: 'openrouter/free',
   clientId: '', deviceName: isIOS ? (/iPad/.test(navigator.userAgent) || navigator.maxTouchPoints > 1 && !/iPhone/.test(navigator.userAgent) ? 'iPad' : 'iPhone') : 'Bilgisayar',
@@ -376,9 +376,11 @@ const hasBrain = () => !!(S.geminiKey || S.groqKey || S.orKey);
 
 function providers() {
   const list = [];
-  if (S.geminiKey) list.push({ name: 'Gemini', mk: 'geminiModel', call: callGemini, discover: discoverGemini });
-  if (S.groqKey) list.push({ name: 'Groq', mk: 'groqModel', call: (s, m) => callOpenAI('https://api.groq.com/openai/v1/chat/completions', S.groqKey, S.groqModel, s, m), discover: discoverGroq });
-  if (S.orKey) list.push({ name: 'OpenRouter', mk: 'orModel', call: (s, m) => callOpenAI('https://openrouter.ai/api/v1/chat/completions', S.orKey, S.orModel, s, m, { 'HTTP-Referer': location.origin, 'X-Title': 'Jarvis' }), discover: discoverOpenRouter });
+  const full = s => typeof s === 'function' ? s(false) : s, short = s => typeof s === 'function' ? s(true) : s;
+  if (S.geminiKey) list.push({ name: 'Gemini', gemini: true, call: (s, m, o) => callGeminiChain(full(s), m, o) });
+  // Groq ücretsiz planda dakikada 8.000 token: kısa talimat + son 6 mesaj
+  if (S.groqKey) list.push({ name: 'Groq', mk: 'groqModel', call: (s, m) => callOpenAI('https://api.groq.com/openai/v1/chat/completions', S.groqKey, S.groqModel, short(s), m.slice(-6)), discover: discoverGroq });
+  if (S.orKey) list.push({ name: 'OpenRouter', mk: 'orModel', call: (s, m) => callOpenAI('https://openrouter.ai/api/v1/chat/completions', S.orKey, S.orModel, short(s), m.slice(-10), { 'HTTP-Referer': location.origin, 'X-Title': 'Jarvis' }), discover: discoverOpenRouter });
   return list;
 }
 
@@ -392,7 +394,7 @@ async function fetchJSON(url, opts, ms = 25000) {
   } finally { clearTimeout(tm); }
 }
 
-async function callGemini(sys, msgs) {
+async function callGemini(sys, msgs, model) {
   const contents = [];
   msgs.forEach(m => {
     const role = m.role === 'user' ? 'user' : 'model';
@@ -400,7 +402,7 @@ async function callGemini(sys, msgs) {
     else contents.push({ role, parts: [{ text: m.content }] });
   });
   if (contents[0]?.role !== 'user') contents.unshift({ role: 'user', parts: [{ text: '(oturum başladı)' }] });
-  const j = await fetchJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.geminiModel)}:generateContent`, {
+  const j = await fetchJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': S.geminiKey },
     body: JSON.stringify({ systemInstruction: { parts: [{ text: sys }] }, contents, generationConfig: { temperature: .7, maxOutputTokens: 4096 } })
   });
@@ -421,14 +423,48 @@ async function callOpenAI(url, key, model, sys, msgs, extra = {}) {
 
 const MODEL_GONE = /404|not.?found|decommission|deprecat|does not exist|no longer|model_not_found|invalid model|not a valid model|not supported|unknown model|no endpoints/i;
 
-async function discoverGemini() {
+/* Gemini: ücretsiz kota MODEL BAŞINA ayrı ve Pasifik saatiyle gece yarısı (TR ~11:00) sıfırlanır.
+   Bir model dolunca aynı anahtarla sıradaki modele geçilir. Günlük işler: önce kotası geniş "Lite";
+   PDF ve uzun anlatım: önce güçlü model. */
+const GEM_DEFAULT = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'];
+let geminiLast = '';
+const gemX = () => load('jarvis.gemx', {});
+function gemMark(m, ms) { const x = gemX(); x[m] = Date.now() + ms; save('jarvis.gemx', x); }
+function msToQuotaReset() {           // Pasifik gece yarısı ≈ 08:00 UTC (kış)
+  const n = new Date(), r = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate(), 8, 1, 0));
+  if (r <= n) r.setUTCDate(r.getUTCDate() + 1);
+  return r - n;
+}
+async function refreshGemList() {
   const j = await fetchJSON('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': S.geminiKey } });
-  const ok = (j.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
-    .map(m => m.name.replace(/^models\//, '')).filter(n => !/image|tts|live|audio|embedding|robotics|computer|exp/i.test(n));
   const ver = n => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [0, 0])[1]);
-  const rank = n => (/-flash$/.test(n) ? 3 : /-flash-lite$/.test(n) ? 2 : /flash/.test(n) && !/preview/.test(n) ? 1 : 0);
-  ok.sort((a, b) => rank(b) - rank(a) || ver(b) - ver(a));
-  return ok[0];
+  const list = (j.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map(m => m.name.replace(/^models\//, ''))
+    .filter(n => /^gemini-[\d.]+-flash(-lite)?$/.test(n))
+    .sort((a, b) => ver(b) - ver(a));
+  if (list.length) save('jarvis.gemlist', { t: Date.now(), list });
+}
+function gemOrder(quality) {
+  const base = load('jarvis.gemlist', null)?.list || GEM_DEFAULT;
+  const all = [...new Set([S.geminiModel, ...base].filter(Boolean))];
+  const lite = all.filter(m => /lite/.test(m)), strong = all.filter(m => !/lite/.test(m));
+  const x = gemX();
+  return (quality ? [...strong, ...lite] : [...lite, ...strong]).filter(m => !(x[m] > Date.now()));
+}
+async function callGeminiChain(sys, msgs, opt = {}) {
+  const gl = load('jarvis.gemlist', null);
+  if (!gl || Date.now() - gl.t > 3 * 864e5) await refreshGemList().catch(() => {});
+  let last = null;
+  for (const m of gemOrder(opt.quality).slice(0, 6)) {
+    try { const out = await callGemini(sys, msgs, m); geminiLast = m; return out; }
+    catch (e) {
+      last = e;
+      if (/^429/.test(e.message)) { gemMark(m, /minute|PerMinute|RPM/i.test(e.message) ? 65e3 : msToQuotaReset()); continue; }
+      if (MODEL_GONE.test(e.message)) { gemMark(m, 7 * 864e5); continue; }
+      throw e;
+    }
+  }
+  throw last || new Error('429 Gemini modellerinin günlük ücretsiz kotası doldu');
 }
 async function discoverGroq() {
   const j = await fetchJSON('https://api.groq.com/openai/v1/models', { headers: { Authorization: 'Bearer ' + S.groqKey } });
@@ -443,21 +479,22 @@ async function discoverOpenRouter() {
   return free.find(i => /gpt-oss-120b/.test(i)) || free.find(i => /llama|qwen|gemma|deepseek|mistral/i.test(i)) || free[0];
 }
 
-async function think(sys, msgs) {
+async function think(sys, msgs, opt = {}) {
   const errs = [];
   for (const p of providers()) {
     try {
       let out;
-      try { out = await p.call(sys, msgs); }
+      try { out = await p.call(sys, msgs, opt); }
       catch (e) {
-        if (!MODEL_GONE.test(e.message)) throw e;
+        if (p.gemini || !MODEL_GONE.test(e.message)) throw e;
         const m = await p.discover().catch(() => null);
         if (!m || m === S[p.mk]) throw e;
         addLog('sys', `◆ ${p.name} modeli güncellendi: ${S[p.mk]} → ${m}`);
         S[p.mk] = m; save('jarvis.settings', S);
-        out = await p.call(sys, msgs);
+        out = await p.call(sys, msgs, opt);
       }
-      if (activeBrain !== p.name) { activeBrain = p.name; refreshChips(); }
+      const label = p.gemini ? 'Gemini ' + geminiLast.replace(/^gemini-/, '').replace('-flash-lite', ' Lite').replace('-flash', '') : p.name;
+      if (activeBrain !== label) { activeBrain = label; refreshChips(); }
       return out;
     } catch (e) { errs.push(p.name + ': ' + e.message); console.warn(p.name, e); }
   }
@@ -465,10 +502,10 @@ async function think(sys, msgs) {
   throw new Error(errs.join(' | ') || 'anahtar yok');
 }
 
-function systemPrompt(userText = '') {
+function systemPrompt(userText = '', compact = false) {
   const p = M.profile, now = new Date();
   const wantNews = /brifing|haber|gündem|günaydın|spor|siyaset|maç|seçim|meclis|neler oluyor|bugün neler/i.test(userText);
-  const mailCtx = mails.slice(0, 8).map((m, i) => `${i + 1}. [önem ${m.score}] ${m.from} — "${m.subject}" — ${m.snippet.slice(0, 140)} (${m.ago})`).join('\n') || (token ? 'Okunmamış önemli mail yok.' : 'Google bağlı değil.');
+  const mailCtx = mails.slice(0, compact ? 4 : 8).map((m, i) => `${i + 1}. [önem ${m.score}] ${m.from} — "${m.subject}" — ${m.snippet.slice(0, 140)} (${m.ago})`).join('\n') || (token ? 'Okunmamış önemli mail yok.' : 'Google bağlı değil.');
   const stale = mails.filter(m => m.hours >= 24).length;
   const taskCtx = tasks.map(t => `- ${t.title}${t.due ? ' (son tarih ' + t.due + ')' : ''}`).join('\n') || (token ? 'Liste boş.' : 'Google bağlı değil.');
   return `${timeBlock()}
@@ -484,7 +521,7 @@ KULLANICI HAKKINDA:
 ${p.about || '(henüz bilgi yok)'}
 Önemli kişiler: ${p.vip || '(belirtilmedi)'}
 Hatırladıkların:
-${M.facts.map(f => '- ' + f.text).join('\n') || '(henüz yok)'}
+${M.facts.slice(compact ? -12 : -40).map(f => '- ' + f.text).join('\n') || '(henüz yok)'}
 
 GÜNCEL DURUM:
 Okunmamış önemli mailler:
@@ -495,9 +532,9 @@ ${taskCtx}
 Hava durumu: ${weatherText() || 'bilinmiyor'}
 Bugünkü takvim:
 ${calendarText() || (token ? 'Bugün takvimde etkinlik yok.' : 'Google bağlı değil.')}
-${wantNews ? newsContext() : ''}
+${wantNews ? newsContext(compact) : ''}
 WHATSAPP (bilgisayardaki bildirimlerden):
-${whatsappContext()}
+${whatsappContext(compact)}
 Şu an çalan müzik: ${ytCur && $('#yt').classList.contains('on') ? `${ytCur.title} — ${ytCur.channel}${ytQueue.length > 1 ? ` (sırada ${ytQueue.length - ytIdx - 1} şarkı daha)` : ''}` : 'yok'}
 Bilgisayar ajanı: ${agent ? (agentOnline() ? `çevrimiçi (${agent.name}, ${agent.files} dosya dizinli)` : 'çevrimdışı, bilgisayar kapalı veya uykuda olabilir') : 'kurulmamış'}
 Son dosya arama sonuçları:
@@ -542,10 +579,14 @@ async function handleUser(text) {
   try {
     const ta = timeAnswer(text);
     if (ta) reply = ta;
+    // net istekler yapay zekaya hiç sorulmadan yapılır: hem hızlı hem kota harcamaz
+    else if (musicIntent(text)) { const q = musicQuery(text); pending.push(() => playYouTube(q.query, q.kind)); reply = 'Hemen açıyorum.'; }
+    else if (searchIntent(text)) { pending.push(() => webAnswer(searchQuery(text), text)); reply = 'Hemen bakıyorum.'; }
+    else if (pdfIntent(text) && hasBrain()) { pending.push(() => makePdf('', '', text)); reply = 'Hemen hazırlıyorum.'; }
     else if (!hasBrain()) reply = await offlineBrain(text);
     else {
       const msgs = M.history.slice(-14).map(h => ({ role: h.r === 'u' ? 'user' : 'assistant', content: h.r === 'u' ? msgStamp(h.t) + h.c : h.c }));
-      const raw = await think(systemPrompt(text), msgs);
+      const raw = await think(c => systemPrompt(text, c), msgs, { quality: /anlat|açıkla|kimdir|nedir|detay|farkı|nasıl/i.test(text) });
       reply = await runActions(raw);
       // PDF istendiği halde yapay zeka komutu vermezse
       if (pdfIntent(text) && !/\[\[\s*PDF/i.test(raw)) { pending.push(() => makePdf('', '', text)); reply = 'Hemen hazırlıyorum.'; }
@@ -560,7 +601,7 @@ async function handleUser(text) {
     }
   } catch (e) {
     console.error(e); fx.err();
-    reply = 'Üzgünüm, beyin modüllerimin hiçbirine ulaşamadım. Anahtarları ve internet bağlantısını kontrol eder misiniz?';
+    reply = quotaMessage(e.message) || 'Üzgünüm, beyin modüllerimin hiçbirine ulaşamadım. Anahtarları ve internet bağlantısını kontrol eder misiniz?';
     addLog('sys', 'HATA: ' + e.message.slice(0, 400));
   }
   busy = false;
@@ -618,6 +659,12 @@ function musicQuery(t) {
     .replace(/[.!?,]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!q) q = (M.profile.about && /müzik|rock|pop|rap|caz|jazz|arabesk|türkü/i.test(M.profile.about)) ? M.profile.about.match(/(rock|pop|rap|caz|jazz|arabesk|türkü|klasik)/i)?.[0] + ' karışık' : 'Türkçe pop karışık';
   return { query: q + (liste && !/karışık|playlist|liste/i.test(q) ? ' karışık' : ''), kind: liste ? 'liste' : 'sarki' };
+}
+
+function quotaMessage(msg) {
+  if (!/429|quota|rate.?limit|exhausted/i.test(msg)) return '';
+  const at = clock(new Date(Date.now() + msToQuotaReset())), h = M.profile.hitap || 'efendim';
+  return `Bugünkü ücretsiz yapay zeka kotam doldu, ${h}. Gemini kotası saat ${at} civarında yenilenecek.${S.groqKey ? '' : ' Ayarlara ücretsiz bir Groq anahtarı eklerseniz günde bin soruya kadar kesintisiz devam ederim.'} Bu arada müzik, saat, hava ve internette arama gibi işler çalışmaya devam ediyor.`;
 }
 
 /* anahtar yokken basit yerel cevaplar */
@@ -891,8 +938,8 @@ BİÇİM (sadece bu işaretleri kullan): ilk satır "# Başlık"; bölümler "##
 İÇERİK: kısa bir giriş, konuya uygun 3-7 ana bölüm, gerekirse karşılaştırma ya da önemli kavramlar listesi, kısa bir sonuç. 700-1500 kelime. Doğru ve dengeli ol; tartışmalı konularda farklı görüşleri adil yansıt. Emin olmadığın tarih, rakam ya da alıntıyı uydurma; uydurma kaynak listesi ekleme.
 Sadece belgenin kendisini yaz; öncesine ya da sonrasına açıklama, [[ ]] komutu veya kod bloğu ekleme.`;
   let md;
-  try { md = await think(sys, [...recent, { role: 'user', content: msgStamp(Date.now()) + (userText || title || 'Bu konuyu PDF yap') }]); }
-  catch (e) { setState('idle'); return say('Belgeyi yazarken bir sorun oldu: ' + e.message.slice(0, 120)); }
+  try { md = await think(sys, [...recent, { role: 'user', content: msgStamp(Date.now()) + (userText || title || 'Bu konuyu PDF yap') }], { quality: true }); }
+  catch (e) { setState('idle'); return say(quotaMessage(e.message) || 'Belgeyi yazarken bir sorun oldu: ' + e.message.slice(0, 120)); }
   md = md.replace(/^```(?:markdown|md)?\s*|```\s*$/g, '').replace(/\[\[[^\]]*\]\]/g, '').trim();
   const t1 = (md.match(/^#\s+(.+)$/m) || [])[1] || title || 'Jarvis belgesi';
   lastDoc = { title: t1.replace(/\*\*/g, ''), md, blob: null, file: fileSafe(t1.replace(/\*\*/g, '')) + '.pdf' };
@@ -1032,12 +1079,13 @@ async function webAnswer(q, userText) {
   }
   const ctx = (res.answer ? `Hızlı özet: ${res.answer}\n` : '') + res.results.map((r, i) => `[${i + 1}] ${r.title} (${r.url})\n${r.text}`).join('\n\n');
   if (!hasBrain()) { setState('idle'); return say(res.answer || res.results[0].text.split(/(?<=[.!?])\s/).slice(0, 2).join(' ')); }
-  const sys = systemPrompt(userText) + `
+  const sysExtra = `
 
 İNTERNET ARAMA SONUÇLARI (${res.via}, sorgu: "${q}", ${longDate(new Date())} ${clock(new Date())} itibarıyla):
 ${ctx}
 
 Kullanıcının sorusunu SADECE bu sonuçlara dayanarak, sesli okunacak şekilde 1-4 kısa cümleyle cevapla. Sayıları ve tarihleri sonuçlardaki gibi ver. Sonuçlar çelişiyorsa ya da cevap içlerinde yoksa bunu açıkça söyle, uydurma. Siyasi konularda tarafsız kal. Kaynağı kısaca an ("… sitesine göre"). Bu cevapta hiçbir [[ ]] komutu kullanma.`;
+  const sys = c => systemPrompt(userText, true) + sysExtra;
   try {
     const out = (await think(sys, [{ role: 'user', content: msgStamp(Date.now()) + (userText || q) }])).replace(/\[\[[^\]]*\]\]/g, '').replace(/[*#_`>]/g, '').trim();
     setState('idle'); await say(out);
@@ -1518,10 +1566,10 @@ async function loadNews() {
   if (!r.ok) throw new Error('news.json yok');
   news = await r.json();
 }
-function newsContext() {
+function newsContext(compact) {
   if (!news) return 'Haber akışı: henüz yok (GitHub haber görevi kurulmamış olabilir).';
   const age = Math.round((Date.now() - new Date(news.updated)) / 60000);
-  const fmt = arr => (arr || []).slice(0, 10).map(x => `- ${x.title} (${x.source})`).join('\n');
+  const fmt = arr => (arr || []).slice(0, compact ? 5 : 10).map(x => `- ${x.title} (${x.source})`).join('\n');
   return `GÜNCEL HABER BAŞLIKLARI (${age < 90 ? age + ' dakika' : Math.round(age / 60) + ' saat'} önce derlendi, kaynak: Google Haberler):
 SPOR:
 ${fmt(news.spor)}
@@ -1565,14 +1613,14 @@ function renderWhatsApp() {
   }).join('') : '<div class="empty">Son 48 saatte WhatsApp mesajı yok.</div>';
   if (wa.error) box.innerHTML += `<div class="empty" style="color:var(--a)">Okuma hatası: ${esc(wa.error)}</div>`;
 }
-function whatsappContext() {
+function whatsappContext(compact) {
   if (!wa) return agent ? 'Henüz WhatsApp verisi yok.' : 'PC ajanı kurulmamış; WhatsApp okunamıyor.';
   const stale = Date.now() - wa.updated > 10 * 60e3 ? ` (DİKKAT: son güncelleme ${ago(wa.updated)}, bilgisayar kapalı olabilir)` : '';
   const groups = waGroups();
   if (!groups.length) return 'Son 48 saatte mesaj yok.' + stale;
-  return groups.slice(0, 10).map(x => {
+  return groups.slice(0, compact ? 5 : 10).map(x => {
     const status = x.waiting ? `${x.waiting} mesaj BEKLİYOR (ilki ${ago(x.first)}, muhtemelen henüz bakılmadı)` : `hepsi görülmüş görünüyor, son mesaj ${ago(x.last)}`;
-    const texts = wa.content ? ' Mesajlar: ' + x.msgs.slice(0, 4).reverse().map(m => `"${(m.text || '').slice(0, 160)}"`).join(' / ') : '';
+    const texts = wa.content ? ' Mesajlar: ' + x.msgs.slice(0, compact ? 2 : 4).reverse().map(m => `"${(m.text || '').slice(0, compact ? 100 : 160)}"`).join(' / ') : '';
     return `- ${x.sender}: ${status}.${texts}`;
   }).join('\n') + stale;
 }
