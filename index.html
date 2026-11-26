@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>J.A.R.V.I.S</title>
+<meta name="theme-color" content="#02070d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-512.png">
+<link rel="icon" href="icon-512.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#02070d; --panel:rgba(6,22,34,.62); --line:rgba(62,240,255,.28);
+  --c:#3ef0ff; --c2:#8af7ff; --dim:#4f8796; --a:#ffb347; --r:#ff4d6d; --g:#5dffa8;
+  --txt:#d6fbff; --glow:0 0 12px rgba(62,240,255,.55);
+  --st:env(safe-area-inset-top); --sb:env(safe-area-inset-bottom);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;background:var(--bg);color:var(--txt);font-family:Rajdhani,system-ui,sans-serif;overflow:hidden}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:1;
+  background:
+   radial-gradient(ellipse at 50% 38%,rgba(62,240,255,.10),transparent 60%),
+   linear-gradient(rgba(62,240,255,.035) 1px,transparent 1px) 0 0/100% 34px,
+   linear-gradient(90deg,rgba(62,240,255,.035) 1px,transparent 1px) 0 0/34px 100%}
+body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px);mix-blend-mode:multiply}
+.mono{font-family:Orbitron,monospace;letter-spacing:.12em}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+
+/* ---------- layout ---------- */
+#app{position:relative;z-index:2;height:100%;display:grid;
+  grid-template-rows:auto minmax(0,1fr) auto;grid-template-columns:minmax(0,1fr);padding:calc(var(--st) + 10px) 14px calc(var(--sb) + 10px)}
+header{display:flex;align-items:center;gap:12px;padding:4px 4px 10px;border-bottom:1px solid var(--line)}
+.logo{font-family:Orbitron;font-weight:900;font-size:20px;letter-spacing:.38em;color:var(--c);text-shadow:var(--glow)}
+.clock{margin-left:auto;text-align:right;font-family:Orbitron;font-size:13px;color:var(--c2)}
+.clock small{display:block;font-family:Rajdhani;color:var(--dim);font-size:12px;letter-spacing:.1em}
+.iconbtn{width:38px;height:38px;border:1px solid var(--line);border-radius:10px;display:grid;place-items:center;color:var(--c)}
+.iconbtn:hover{box-shadow:var(--glow)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;padding:8px 2px}
+.chip{font-size:11px;font-family:Orbitron;letter-spacing:.1em;padding:4px 9px;border:1px solid var(--line);border-radius:20px;color:var(--dim);display:flex;align-items:center;gap:6px}
+.chip i{width:7px;height:7px;border-radius:50%;background:var(--dim);display:inline-block}
+.chip.on{color:var(--c2)} .chip.on i{background:var(--g);box-shadow:0 0 8px var(--g)}
+.chip.warn i{background:var(--a);box-shadow:0 0 8px var(--a)}
+
+#mid{display:flex;flex-direction:column;min-height:0;min-width:0}
+footer,header,.chips{min-width:0}
+main{flex:1;display:grid;grid-template-columns:minmax(240px,1fr) minmax(320px,1.3fr) minmax(240px,1fr);gap:14px;min-height:0;padding-top:4px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:4px;position:relative;display:flex;flex-direction:column;min-height:0;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  clip-path:polygon(0 14px,14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%)}
+.panel h3{font-family:Orbitron;font-size:12px;letter-spacing:.22em;color:var(--c);padding:12px 14px 8px;display:flex;align-items:center;gap:8px;border-bottom:1px dashed var(--line)}
+.panel h3 span.n{margin-left:auto;color:var(--a)}
+.panel h3 button{color:var(--dim);font-size:11px;border:1px solid var(--line);padding:2px 7px;border-radius:4px}
+.list{overflow:auto;padding:8px 10px 12px;flex:1}
+.list::-webkit-scrollbar{width:4px}.list::-webkit-scrollbar-thumb{background:var(--line)}
+.empty{color:var(--dim);font-size:14px;padding:14px 6px;text-align:center}
+.mail{padding:9px 8px;border-left:2px solid var(--line);margin-bottom:8px;background:rgba(62,240,255,.03);animation:slide .5s both}
+.mail.hot{border-left-color:var(--a)} .mail.crit{border-left-color:var(--r)}
+.mail .f{font-weight:700;font-size:14px;color:var(--c2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mail .s{font-size:14px;margin:2px 0}
+.mail .p{font-size:12.5px;color:var(--dim);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.bar{height:3px;background:rgba(255,255,255,.06);margin-top:6px}
+.bar b{display:block;height:100%;background:linear-gradient(90deg,var(--c),var(--a))}
+.task{display:flex;gap:10px;align-items:flex-start;padding:8px 6px;border-bottom:1px solid rgba(62,240,255,.08);animation:slide .5s both}
+.task .ck{flex:none;width:18px;height:18px;border:1.5px solid var(--c);transform:rotate(45deg) scale(.8);margin-top:2px}
+.task .ck:hover{background:var(--c);box-shadow:var(--glow)}
+.task .t{font-size:15px}.task .d{font-size:12px;color:var(--a)}
+@keyframes slide{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
+
+/* center core */
+#core{display:flex;flex-direction:column;min-height:0}
+#reactorWrap{position:relative;flex:1;min-height:220px}
+#reactor{position:absolute;inset:0;width:100%;height:100%;cursor:pointer}
+#stateLbl{position:absolute;left:0;right:0;bottom:6px;text-align:center;font-family:Orbitron;font-size:11px;letter-spacing:.4em;color:var(--dim)}
+#live{text-align:center;min-height:26px;font-size:17px;color:var(--c2);padding:0 10px;text-shadow:var(--glow)}
+#log{height:30%;min-height:110px;overflow:auto;padding:8px 6px;mask-image:linear-gradient(transparent,#000 22%)}
+.msg{margin:6px 0;font-size:15px;line-height:1.35;animation:slide .4s both}
+.msg.u{text-align:right;color:var(--a)}
+.msg.u::before{content:"SİZ ▸ ";font-family:Orbitron;font-size:9px;letter-spacing:.2em;opacity:.7}
+.msg.j::before{content:"JARVIS ▸ ";font-family:Orbitron;font-size:9px;letter-spacing:.2em;color:var(--c)}
+.msg.sys{color:var(--dim);font-size:12.5px;text-align:center;font-family:Orbitron;letter-spacing:.08em}
+
+footer{padding-top:10px}
+.quick{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;scrollbar-width:none}
+.quick::-webkit-scrollbar{display:none}
+.q{flex:none;font-family:Orbitron;font-size:10.5px;letter-spacing:.14em;padding:8px 12px;border:1px solid var(--line);color:var(--c2);
+  clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);background:rgba(62,240,255,.05)}
+.q:hover,.q:active{background:rgba(62,240,255,.18);color:#fff}
+.q.m{border-color:rgba(255,179,71,.5);color:var(--a)}
+.inputbar{display:flex;gap:10px;align-items:center}
+#txt{flex:1;background:rgba(62,240,255,.05);border:1px solid var(--line);color:var(--txt);font:inherit;font-size:16px;padding:12px 14px;outline:none;border-radius:2px}
+#txt:focus{box-shadow:var(--glow)}
+#mic{width:58px;height:58px;border-radius:50%;border:2px solid var(--c);color:var(--c);display:grid;place-items:center;position:relative;box-shadow:var(--glow),inset 0 0 14px rgba(62,240,255,.3)}
+#mic.rec{border-color:var(--a);color:var(--a);box-shadow:0 0 22px rgba(255,179,71,.7)}
+#mic.rec::after{content:"";position:absolute;inset:-8px;border-radius:50%;border:1px solid var(--a);animation:ping 1.2s infinite}
+@keyframes ping{from{transform:scale(.9);opacity:1}to{transform:scale(1.35);opacity:0}}
+
+/* mobile tabs */
+.tabs{display:none}
+@media (max-width:900px){
+  main{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr)}
+  main>.panel,#core{display:none}
+  main>.show,main>#core.show{display:flex}
+  #log{height:34%}
+  .tabs{display:flex;gap:0;border:1px solid var(--line);margin-top:8px}
+  .tabs button{flex:1;padding:9px 0;font-family:Orbitron;font-size:10px;letter-spacing:.16em;color:var(--dim)}
+  .tabs button.act{color:var(--bg);background:var(--c)}
+  .logo{font-size:15px;letter-spacing:.22em}
+  .clock{font-size:12px}
+  .chip{font-size:9.5px;padding:3px 7px}
+  main{grid-template-columns:minmax(0,1fr)}
+}
+
+/* boot */
+#boot{position:fixed;inset:0;z-index:40;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;transition:opacity .8s}
+#boot.gone{opacity:0;pointer-events:none}
+#bootLines{font-family:Orbitron;font-size:11px;letter-spacing:.14em;color:var(--dim);width:min(420px,86vw);min-height:150px}
+#bootLines div{margin:5px 0;animation:slide .3s both}
+#bootLines div b{color:var(--g);float:right;font-weight:500}
+#bootBar{width:min(420px,86vw);height:2px;background:rgba(62,240,255,.12)}
+#bootBar b{display:block;height:100%;width:0;background:var(--c);box-shadow:var(--glow);transition:width .3s}
+#bootBtn{font-family:Orbitron;letter-spacing:.3em;font-size:13px;color:var(--c);border:1px solid var(--c);padding:14px 26px;opacity:0;transition:opacity .6s;box-shadow:var(--glow);
+  clip-path:polygon(12px 0,100% 0,calc(100% - 12px) 100%,0 100%)}
+#bootBtn.ready{opacity:1;animation:breath 2s infinite}
+@keyframes breath{50%{background:rgba(62,240,255,.15)}}
+.bigLogo{font-family:Orbitron;font-weight:900;font-size:clamp(26px,7vw,54px);letter-spacing:.5em;color:var(--c);text-shadow:0 0 28px rgba(62,240,255,.7);padding-left:.5em}
+
+/* modal */
+#settings{position:fixed;inset:0;z-index:45;background:rgba(1,5,9,.86);display:none;align-items:center;justify-content:center;padding:calc(var(--st) + 12px) 12px calc(var(--sb) + 12px)}
+#settings.open{display:flex}
+.sheet{width:min(620px,100%);max-height:100%;overflow:auto;background:#041019;border:1px solid var(--c);box-shadow:0 0 40px rgba(62,240,255,.25);padding:18px}
+.sheet h2{font-family:Orbitron;letter-spacing:.25em;font-size:15px;color:var(--c);margin-bottom:4px}
+.sheet h4{font-family:Orbitron;font-size:11px;letter-spacing:.2em;color:var(--a);margin:18px 0 8px;border-bottom:1px dashed var(--line);padding-bottom:5px}
+.sheet label{display:block;font-size:13px;color:var(--dim);margin:8px 0 3px}
+.sheet input,.sheet select,.sheet textarea{width:100%;background:rgba(62,240,255,.05);border:1px solid var(--line);color:var(--txt);font:inherit;font-size:15px;padding:9px 10px;outline:none}
+.sheet textarea{min-height:70px;resize:vertical}
+.sheet .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sheet .hint{font-size:12.5px;color:var(--dim);margin-top:4px;line-height:1.4}
+.sheet .act{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;position:sticky;bottom:-18px;background:#041019;padding:12px 0}
+.btn{font-family:Orbitron;font-size:11px;letter-spacing:.2em;padding:11px 16px;border:1px solid var(--c);color:var(--c)}
+.btn.p{background:var(--c);color:var(--bg)}
+.fact{display:flex;gap:8px;align-items:center;font-size:14px;padding:4px 0;border-bottom:1px solid rgba(62,240,255,.08)}
+.fact button{margin-left:auto;color:var(--r)}
+#files{position:fixed;inset:0;z-index:45;background:rgba(1,5,9,.86);display:none;align-items:center;justify-content:center;padding:calc(var(--st) + 12px) 12px calc(var(--sb) + 12px)}
+#files.open{display:flex}
+#fq{flex:1;background:rgba(62,240,255,.05);border:1px solid var(--line);color:var(--txt);font:inherit;font-size:16px;padding:10px 12px;outline:none}
+.file{display:flex;gap:10px;align-items:center;padding:10px 6px;border-bottom:1px solid rgba(62,240,255,.1);animation:slide .4s both}
+.file .no{font-family:Orbitron;color:var(--a);font-size:13px;width:22px;flex:none}
+.file .meta{flex:1;min-width:0}
+.file .nm{font-size:15px;color:var(--c2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file .fd{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+.file .btn{padding:8px 10px;font-size:10px;flex:none}
+.file a.btn{text-decoration:none;background:var(--g);border-color:var(--g);color:var(--bg)}
+#wx{font-family:Orbitron;font-size:13px;color:var(--c2);display:flex;align-items:center;gap:6px;padding:0 4px;white-space:nowrap}
+#wx b{font-size:20px;font-weight:500}
+#wx small{display:block;font-family:Rajdhani;font-size:11px;color:var(--dim);letter-spacing:.08em}
+#agenda{padding:6px 10px;max-height:34%;overflow:auto;border-bottom:1px dashed var(--line)}
+.ev{display:flex;gap:10px;padding:6px 4px;animation:slide .5s both}
+.ev .tm{font-family:Orbitron;font-size:11.5px;color:var(--a);width:58px;flex:none;padding-top:2px;white-space:nowrap}
+.ev .tt{font-size:15px}.ev .lc{font-size:12px;color:var(--dim)}
+.ev.past>*{opacity:.4}
+.ev.now .tm{color:var(--g)}
+@media (max-width:900px){#wx small{display:none}#wx b{font-size:16px}}
+#wa{padding:6px 10px;max-height:38%;overflow:auto;border-bottom:1px dashed var(--line)}
+.wa{padding:7px 8px;margin-bottom:6px;border-left:2px solid #25d366;background:rgba(37,211,102,.05);animation:slide .5s both}
+.wa.seen{border-left-color:var(--line)}.wa.seen>*{opacity:.5}
+.wa .f{display:flex;justify-content:space-between;font-weight:700;font-size:14px;color:var(--c2)}
+.wa .f>span{font-weight:500;font-size:11.5px;color:var(--dim)}
+.wa .p{font-size:13px;color:var(--txt);opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wa .cnt{display:inline-block;font-weight:700;min-width:18px;text-align:center;background:#25d366;color:#02070d;border-radius:9px;font-size:11px;padding:0 5px;margin-left:6px}
+#toast{position:fixed;left:50%;top:calc(var(--st) + 14px);transform:translate(-50%,-140%);z-index:60;background:#041019;border:1px solid var(--a);color:var(--a);padding:10px 16px;font-size:14px;transition:transform .35s,visibility .35s;max-width:90vw;visibility:hidden}
+#toast.on{visibility:visible}
+#toast.on{transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+
+<div id="boot">
+  <div class="bigLogo">JARVIS</div>
+  <div id="bootLines"></div>
+  <div id="bootBar"><b></b></div>
+  <button id="bootBtn">SİSTEMİ BAŞLAT</button>
+</div>
+
+<div id="app">
+  <header>
+    <div class="logo">J.A.R.V.I.S</div>
+    <div class="clock"><span id="clk">--:--:--</span><small id="dt"></small></div>
+    <div id="wx" title="Hava durumu"></div>
+    <button class="iconbtn" id="gBtn" title="Google'a bağlan">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M5.6 5.6a9 9 0 1 0 12.8 0"/></svg>
+    </button>
+    <button class="iconbtn" id="setBtn" title="Ayarlar">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </header>
+
+  <div id="mid">
+    <div class="chips">
+      <span class="chip" id="cBrain"><i></i>BEYİN: —</span>
+      <span class="chip" id="cGoogle"><i></i>GOOGLE</span>
+      <span class="chip" id="cSync"><i></i>SENKRON</span>
+      <span class="chip" id="cDev"><i></i>CİHAZLAR: 1</span>
+      <span class="chip" id="cWake"><i></i>"HEY JARVIS"</span>
+      <span class="chip" id="cAgent"><i></i>PC AJANI</span>
+    </div>
+    <main>
+      <section class="panel" id="pMail">
+        <h3>◆ WHATSAPP <span class="n" id="nWa">–</span></h3>
+        <div id="wa"><div class="empty">PC ajanı kurulunca bilgisayarınızdaki WhatsApp mesajları burada.</div></div>
+        <h3>◆ ÖNEMLİ MAİLLER <button id="refMail">YENİLE</button><span class="n" id="nMail">0</span></h3>
+        <div class="list" id="mails"><div class="empty">Google'a bağlanınca önemli mailleriniz burada listelenecek.</div></div>
+      </section>
+      <section id="core" class="show">
+        <div id="reactorWrap"><canvas id="reactor"></canvas><div id="stateLbl">BEKLEMEDE</div></div>
+        <div id="live"></div>
+        <div id="log"></div>
+      </section>
+      <section class="panel" id="pTask">
+        <h3>◆ AJANDA · BUGÜN <span class="n" id="nCal">0</span></h3>
+        <div id="agenda"><div class="empty">Google Takvim bağlanınca bugünkü etkinlikleriniz burada.</div></div>
+        <h3>◆ YAPILACAKLAR <button id="refTask">YENİLE</button><span class="n" id="nTask">0</span></h3>
+        <div class="list" id="tasks"><div class="empty">Google Tasks ile senkronize edilir. Tüm cihazlarınızda aynı liste.</div></div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <div class="quick">
+      <button class="q" data-cmd="Bana günlük brifing ver">▸ BRİFİNG</button>
+      <button class="q" data-cmd="Önemli maillerimi oku">▸ MAİLLER</button>
+      <button class="q" data-cmd="Yapılacaklar listemde ne var?">▸ GÖREVLER</button>
+      <button class="q" data-cmd="WhatsApp'ta bakmadığım mesajlar var mı?">▸ WHATSAPP</button>
+      <button class="q" data-cmd="Spor ve siyaset gündemini özetle">▸ HABERLER</button>
+      <button class="q" id="qFiles">▸ DOSYA BUL</button>
+      <button class="q" data-cmd="Okumadığım ve unuttuğum şeyleri hatırlat">▸ UNUTTUKLARIM</button>
+      <button class="q m" data-music="onceki">⏮</button>
+      <button class="q m" data-music="oynat">⏯</button>
+      <button class="q m" data-music="sonraki">⏭</button>
+    </div>
+    <div class="inputbar">
+      <input id="txt" placeholder="Jarvis'e yazın ya da mikrofona dokunun…" autocomplete="off" enterkeyhint="send">
+      <button id="mic" aria-label="Konuş">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg>
+      </button>
+    </div>
+    <div class="tabs">
+      <button data-tab="pMail">MAİL</button><button data-tab="core" class="act">JARVIS</button><button data-tab="pTask">GÖREV</button>
+    </div>
+  </footer>
+</div>
+
+<div id="settings">
+  <div class="sheet">
+    <h2>◆ SİSTEM AYARLARI</h2>
+    <div class="hint">Anahtarlar yalnızca bu cihazda saklanır. Profil ve hafıza Google Drive'ınızdaki gizli uygulama klasörü üzerinden diğer cihazlarla paylaşılır.</div>
+
+    <h4>SİZİ TANIYAYIM</h4>
+    <div class="row">
+      <div><label>Adınız</label><input id="sName" placeholder="Örn. Mehmet"></div>
+      <div><label>Size nasıl hitap edeyim?</label><input id="sHitap" placeholder="efendim / Mehmet Bey / patron"></div>
+    </div>
+    <label>Şehriniz (hava durumu için — boş bırakırsanız konumunuz kullanılır)</label>
+    <input id="sCity" placeholder="Örn. İstanbul">
+    <label>Önemli kişiler (mailleri her zaman öne çıkar)</label>
+    <input id="sVip" placeholder="annem@gmail.com, patron@sirket.com, Ahmet Yılmaz">
+    <label>Kendinizden bahsedin (iş, alışkanlıklar, ilgi alanları)</label>
+    <textarea id="sAbout" placeholder="Mühendisim, sabahları 7'de kalkarım, rock müzik severim…"></textarea>
+
+    <h4>BEYİN — API ANAHTARLARI (sırayla denenir)</h4>
+    <label>1 · Google Gemini anahtarı</label><input id="kGem" type="password" placeholder="AIza…">
+    <div class="row"><div><label>Gemini modeli</label><input id="mGem"></div><div><label>Groq modeli</label><input id="mGroq"></div></div>
+    <label>2 · Groq anahtarı</label><input id="kGroq" type="password" placeholder="gsk_…">
+    <label>3 · OpenRouter anahtarı</label><input id="kOr" type="password" placeholder="sk-or-…">
+    <label>OpenRouter modeli</label><input id="mOr">
+    <div class="hint">Bir servis limite takılırsa veya hata verirse Jarvis otomatik olarak sıradakine geçer.</div>
+
+    <h4>GOOGLE (GMAIL · TASKS · SENKRON)</h4>
+    <label>OAuth İstemci Kimliği (Client ID)</label><input id="sCid" placeholder="xxxx.apps.googleusercontent.com">
+    <label>Bu cihazın adı</label><input id="sDev" placeholder="iPhone / Bilgisayar / iPad">
+
+    <h4>SES</h4>
+    <label>Jarvis'in sesi</label><select id="sVoice"></select>
+    <div class="row">
+      <div><label>Konuşma hızı</label><input id="sRate" type="number" step="0.05" min="0.6" max="1.6"></div>
+      <div><label>"Hey Jarvis" sürekli dinleme</label><select id="sWake"><option value="0">Kapalı</option><option value="1">Açık (bilgisayar için)</option></select></div>
+    </div>
+
+    <h4>HAFIZA — JARVIS'İN SİZİN HAKKINIZDA BİLDİKLERİ</h4>
+    <div id="facts"></div>
+
+    <div class="act">
+      <button class="btn" id="sTest">SESİ DENE</button>
+      <button class="btn" id="sClose">KAPAT</button>
+      <button class="btn p" id="sSave">KAYDET</button>
+    </div>
+  </div>
+</div>
+<div id="files">
+  <div class="sheet">
+    <h2>◆ DOSYA BUL · GÖNDER</h2>
+    <div class="hint" id="agentInfo">PC ajanı durumu bekleniyor…</div>
+    <div class="inputbar" style="margin-top:12px">
+      <input id="fq" placeholder="Örn. kira sözleşmesi pdf" autocomplete="off" enterkeyhint="search">
+      <button class="btn p" id="fGo">ARA</button>
+    </div>
+    <h4>SONUÇLAR</h4>
+    <div id="fRes"><div class="hint">Sesle de isteyebilirsiniz: "Jarvis, bilgisayarımdaki kira sözleşmesini bul."</div></div>
+    <h4>SON GÖNDERİLENLER · TÜM CİHAZLAR</h4>
+    <div id="fSent"></div>
+    <div class="act"><button class="btn" id="fClose">KAPAT</button></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="app.js"></script>
+</body>
+</html>
