@@ -3,6 +3,7 @@
    Tek dosyalık istemci uygulaması. Sunucu gerekmez.
    ========================================================= */
 'use strict';
+const JARVIS_VERSION = '9';
 
 /* ---------- yardımcılar ---------- */
 const $ = s => document.querySelector(s);
@@ -22,6 +23,7 @@ const DEFAULTS = {
   groqModel: 'openai/gpt-oss-120b',
   orModel: 'openrouter/free',
   clientId: '', deviceName: isIOS ? (/iPad/.test(navigator.userAgent) || navigator.maxTouchPoints > 1 && !/iPhone/.test(navigator.userAgent) ? 'iPad' : 'iPhone') : 'Bilgisayar',
+  ytKey: '', ytMode: 'auto',
   voice: '', rate: 1.0, wake: false, deviceId: uid(), googleWanted: false
 };
 const S = Object.assign({}, DEFAULTS, load('jarvis.settings', {}));
@@ -247,10 +249,11 @@ function speak(text) {
     const parts = text.replace(/\s+/g, ' ').match(/[^.!?…]+[.!?…]*/g) || [text];
     const v = pickVoice();
     setState('speaking');
+    ytDuck(true);
     parts.forEach((p, i) => {
       const u = new SpeechSynthesisUtterance(p.trim());
       u.lang = 'tr-TR'; if (v) u.voice = v; u.rate = +S.rate || 1; u.pitch = .95;
-      if (i === parts.length - 1) u.onend = u.onerror = () => { setState('idle'); resumeWake(); resolve(); };
+      if (i === parts.length - 1) u.onend = u.onerror = () => { ytDuck(false); setState('idle'); resumeWake(); resolve(); };
       speechSynthesis.speak(u);
     });
   });
@@ -458,6 +461,7 @@ ${calendarText() || (token ? 'Bugün takvimde etkinlik yok.' : 'Google bağlı d
 ${wantNews ? newsContext() : ''}
 WHATSAPP (bilgisayardaki bildirimlerden):
 ${whatsappContext()}
+Şu an çalan müzik: ${ytCur && $('#yt').classList.contains('on') ? `${ytCur.title} — ${ytCur.channel}${ytQueue.length > 1 ? ` (sırada ${ytQueue.length - ytIdx - 1} şarkı daha)` : ''}` : 'yok'}
 Bilgisayar ajanı: ${agent ? (agentOnline() ? `çevrimiçi (${agent.name}, ${agent.files} dosya dizinli)` : 'çevrimdışı, bilgisayar kapalı veya uykuda olabilir') : 'kurulmamış'}
 Son dosya arama sonuçları:
 ${fileResults.map(f => `${f.n}. ${f.name} — ${f.folder} — ${f.date}`).join('\n') || '(yok)'}
@@ -468,7 +472,11 @@ EYLEMLER: Bir iş yapman gerektiğinde cevabının EN SONUNA, her biri ayrı sat
 [[HATIRLA: kullanıcı hakkında kalıcı, önemli bilgi]]   (kendisi hakkında önemli bir şey söylediğinde veya "bunu hatırla" dediğinde)
 [[UNUT: unutulacak bilgi]]
 [[MAIL_YENILE]]
-[[MUZIK: sonraki | onceki | oynat]]
+[[MUZIK: sonraki | onceki | oynat | durdur]]
+[[YOUTUBE: arama sorgusu | sarki veya liste]]   (kullanıcı müzik/şarkı/sanatçı/video çalmak istediğinde. Belirli bir şarkı → sarki, örn. "Duman'dan Bu Akşam'ı çal" → [[YOUTUBE: Duman Bu Akşam | sarki]]. Tür, ruh hali, sanatçının şarkıları veya "biraz müzik" → liste, örn. "biraz Türkçe rock" → [[YOUTUBE: Türkçe rock karışık | liste]]; "sevdiğim şeylerden çal" → hafızadaki zevkine göre bir sorgu yaz.)
+[[SES: ac | kis]]   (çalan müziğin sesi)
+SEN MÜZİK ÇALABİLİRSİN: YouTube üzerinden her şarkıyı çalabilirsin. Asla "müzik çalamıyorum" veya "başka bir uygulamadan aç" deme; her müzik isteğinde mutlaka [[YOUTUBE: …]] komutunu ekle.
+Müzik açarken sadece "Hemen açıyorum" gibi çok kısa bir cümle söyle.
 [[DOSYA_ARA: anahtar kelimeler | dosya türü | son kaç gün]]   (bilgisayardaki dosyayı bulmak için; tür örn. pdf, word, excel, foto, video, müzik; tür ve gün bilinmiyorsa boş bırak. Örn. "geçen ay indirdiğim kira sözleşmesi pdf'i" → [[DOSYA_ARA: kira sözleşmesi | pdf | 45]])
 [[DOSYA_GONDER: sonuç numarası]]   (kullanıcı son arama sonuçlarından birini telefonuna istediğinde)
 Dosya ararken veya gönderirken sadece "Hemen bakıyorum" gibi kısa bir cümle söyle; sonuçları sistem ayrıca okuyacak. Tek sonuç varsa ve kullanıcı açıkça "gönder" dediyse aramadan sonra numarayı sorma.
@@ -496,6 +504,12 @@ async function handleUser(text) {
       const msgs = M.history.slice(-14).map(h => ({ role: h.r === 'u' ? 'user' : 'assistant', content: h.c }));
       const raw = await think(systemPrompt(text), msgs);
       reply = await runActions(raw);
+      // Yapay zeka müzik komutunu unutursa isteği Jarvis kendisi yakalar
+      if (musicIntent(text) && !/\[\[\s*YOUTUBE/i.test(raw) && !/\[\[\s*MUZIK/i.test(raw)) {
+        const q = musicQuery(text);
+        pending.push(() => playYouTube(q.query, q.kind));
+        reply = 'Hemen açıyorum.';
+      }
     }
   } catch (e) {
     console.error(e); fx.err();
@@ -530,6 +544,8 @@ async function runActions(raw) {
         case 'UNUT': forget(arg); break;
         case 'MAIL_YENILE': await loadMails(); break;
         case 'MUZIK': music(arg.toLowerCase().replace('ö', 'o')); break;
+        case 'YOUTUBE': { const [q, k] = arg.split('|').map(x => (x || '').trim().toLowerCase()); pending.push(() => playYouTube(arg.split('|')[0].trim(), /liste/.test(k || '') ? 'liste' : 'sarki')); break; }
+        case 'SES': ytVolume(/a[cç]/.test(arg.toLowerCase()) ? 'ac' : 'kis'); break;
         case 'DOSYA_ARA': { const [q, ft, d] = arg.split('|').map(x => (x || '').trim()); pending.push(() => fileSearch(q, ft, parseInt(d) || 0)); break; }
         case 'DOSYA_GONDER': pending.push(() => fileSend(parseInt(arg) || 1)); break;
       }
@@ -538,11 +554,29 @@ async function runActions(raw) {
   return clean || 'Tamamdır.';
 }
 
+
+/* müzik isteğini yerelde tanıma (yapay zekadan bağımsız yedek) */
+function musicIntent(t) {
+  const s = t.toLocaleLowerCase('tr');
+  if (/(sonraki|önceki|durdur|duraklat|devam et|sesi (aç|kıs)|bu şarkı ne)/.test(s)) return false;
+  if (/(^|\s)(çal|çalsana|çalar mısın|çalabilir misin|çalın|dinlet|dinletir misin)(\s|$|[.!?,])|dinlemek istiyorum|youtube'?(da|dan|ta|tan)/.test(s)) return true;
+  return /(^|\s)(aç|açsana|açar mısın|koy|koysana)(\s|$|[.!?,])/.test(s) && /(şarkı|müzik|parça|klip|albüm|youtube|playlist|liste)/.test(s);
+}
+function musicQuery(t) {
+  const liste = /(biraz|karışık|şarkıları|şarkılarından|bir şeyler|tarzı|türü|playlist|çalma listesi|müzik)/i.test(t);
+  let q = t.replace(/['’`´]\p{L}+/gu, '')                              // Haram Geceler'i → Haram Geceler, Duman'dan → Duman
+    .replace(/(^|\s)(hey|jarvis|lütfen|bana|bize|biraz|bir|youtube|youtubedan|youtubeda|şarkısını|şarkısı|şarkıyı|şarkı|şarkılarından|şarkıları|parçasını|parça|müziğini|müzik|klibini|çal|çalsana|çalar|mısın|misin|çalabilir|çalın|aç|açsana|açar|koy|koysana|dinlet|dinletir|dinlemek|istiyorum|şimdi|hemen)(?=\s|$|[.!?,])/giu, ' ')
+    .replace(/[.!?,]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!q) q = (M.profile.about && /müzik|rock|pop|rap|caz|jazz|arabesk|türkü/i.test(M.profile.about)) ? M.profile.about.match(/(rock|pop|rap|caz|jazz|arabesk|türkü|klasik)/i)?.[0] + ' karışık' : 'Türkçe pop karışık';
+  return { query: q + (liste && !/karışık|playlist|liste/i.test(q) ? ' karışık' : ''), kind: liste ? 'liste' : 'sarki' };
+}
+
 /* anahtar yokken basit yerel cevaplar */
 async function offlineBrain(t) {
   const s = t.toLocaleLowerCase('tr');
   const h = M.profile.hitap || 'efendim';
   if (/sonraki|geç|atla/.test(s) && /şarkı|parça|müzik/.test(s)) { music('sonraki'); return 'Sıradaki parçaya geçiyorum.'; }
+  if (musicIntent(t)) { const q = musicQuery(t); pending.push(() => playYouTube(q.query, q.kind)); return 'Hemen açıyorum.'; }
   if (/önceki/.test(s) && /şarkı|parça/.test(s)) { music('onceki'); return 'Önceki parçaya dönüyorum.'; }
   if (/durdur|duraklat|devam et|oynat/.test(s)) { music('oynat'); return 'Müzik komutunu ilettim.'; }
   if (/brifing|günaydın/.test(s)) return briefingText();
@@ -602,13 +636,132 @@ function renderFacts() {
    ========================================================= */
 const SHORTCUTS = { sonraki: 'Jarvis Sonraki', onceki: 'Jarvis Önceki', oynat: 'Jarvis Oynat' };
 function music(action) {
-  const name = SHORTCUTS[action] || SHORTCUTS.sonraki;
+  if (ytActive()) return ytControl(action === 'oynat' ? 'toggle' : action === 'onceki' ? 'prev' : action === 'durdur' ? 'pause' : 'next');
+  const name = SHORTCUTS[action === 'durdur' ? 'oynat' : action] || SHORTCUTS.sonraki;
   if (isIOS) {
     fx.ok();
     setTimeout(() => { location.href = 'shortcuts://run-shortcut?name=' + encodeURIComponent(name); }, 150);
   } else {
     toast('Müzik kontrolü iPhone/iPad\'de Kestirmeler ile çalışır. Kurulum rehberine bakın.');
   }
+}
+
+
+/* =========================================================
+   YOUTUBE MÜZİK — arama: YouTube Data API · çalma: iPhone'da YouTube
+   uygulaması (Premium ile arka planda), bilgisayarda Jarvis içi oynatıcı
+   ========================================================= */
+let ytQueue = [], ytIdx = 0, ytPlayer = null, ytIsPlaying = false, ytVol = 100, ytCur = null;
+const ytMode = () => S.ytMode === 'app' || S.ytMode === 'embed' ? S.ytMode : (isIOS ? 'app' : 'embed');
+const ytActive = () => ytMode() === 'embed' && !!ytPlayer && ytQueue.length > 0 && $('#yt').classList.contains('on');
+
+async function ytApiGet(path, params) {
+  const u = new URL('https://www.googleapis.com/youtube/v3/' + path);
+  Object.entries({ ...params, key: S.ytKey }).forEach(([k, v]) => u.searchParams.set(k, v));
+  return fetchJSON(u.toString(), {});
+}
+const ytItem = (id, sn, list) => ({ id, list, title: decodeHtml(sn.title), channel: decodeHtml(sn.channelTitle || sn.videoOwnerChannelTitle || ''), thumb: sn.thumbnails?.medium?.url || sn.thumbnails?.default?.url || '' });
+
+async function ytFind(query, kind) {
+  const embed = ytMode() === 'embed';
+  if (kind === 'liste') {
+    const pl = await ytApiGet('search', { part: 'snippet', type: 'playlist', maxResults: 5, q: query, regionCode: 'TR', relevanceLanguage: 'tr' });
+    const p0 = pl.items?.[0];
+    if (p0) {
+      const listId = p0.id.playlistId;
+      const it = await ytApiGet('playlistItems', { part: 'snippet', playlistId: listId, maxResults: 30 });
+      const vids = (it.items || []).filter(x => x.snippet?.resourceId?.videoId && !/deleted|private/i.test(x.snippet.title))
+        .map(x => ytItem(x.snippet.resourceId.videoId, x.snippet, listId));
+      if (vids.length) { vids.listTitle = decodeHtml(p0.snippet.title); return vids; }
+    }
+  }
+  const r = await ytApiGet('search', { part: 'snippet', type: 'video', videoCategoryId: 10, maxResults: kind === 'liste' ? 15 : 8, q: query, regionCode: 'TR', relevanceLanguage: 'tr', ...(embed ? { videoEmbeddable: 'true' } : {}) });
+  return (r.items || []).map(x => ytItem(x.id.videoId, x.snippet));
+}
+
+async function playYouTube(query, kind = 'sarki') {
+  query = (query || '').trim(); if (!query) return;
+  const h = M.profile.hitap || 'efendim';
+  if (!S.ytKey) {
+    const url = 'https://www.youtube.com/results?search_query=' + encodeURIComponent(query);
+    if (isIOS) location.href = 'youtube://www.youtube.com/results?search_query=' + encodeURIComponent(query); else window.open(url, '_blank');
+    return say(`YouTube'da aramayı açtım, ${h}. Şarkıyı doğrudan çalabilmem için ayarlara YouTube anahtarı eklemeniz gerekiyor.`);
+  }
+  setState('thinking', 'YOUTUBE ARANIYOR');
+  let list;
+  try { list = await ytFind(query, kind); }
+  catch (e) {
+    setState('idle');
+    return say(/quota/i.test(e.message) ? `Bugünkü YouTube arama kotası doldu, ${h}. Yarın sıfırlanacak.` : 'YouTube araması yapılamadı: ' + e.message.slice(0, 120));
+  }
+  setState('idle');
+  if (!list.length) return say(`YouTube'da bununla eşleşen bir şey bulamadım, ${h}.`);
+  ytQueue = list; ytIdx = 0;
+  addLog('sys', `▶ YOUTUBE: ${list.listTitle ? list.listTitle + ' (' + list.length + ' şarkı)' : list[0].title}`);
+  pushHistory('j', `(YouTube'da çalınıyor: ${list[0].title} — ${list[0].channel})`);
+  ytStart();
+}
+
+function ytStart() {
+  const v = ytQueue[ytIdx]; if (!v) return;
+  ytCur = v;
+  const box = $('#yt');
+  box.classList.add('on'); box.classList.toggle('embed', ytMode() === 'embed'); box.classList.toggle('app', ytMode() === 'app');
+  $('#ytTitle').textContent = v.title; $('#ytCh').textContent = v.channel; $('#ytThumb').src = v.thumb;
+  $('#ytPos').textContent = ytQueue.length > 1 ? `· ${ytIdx + 1}/${ytQueue.length}` : '';
+  if (ytMode() === 'embed') ytEmbed(v); else ytOpenApp(v);
+}
+
+function ytOpenApp(v) {
+  const q = `v=${v.id}${v.list ? '&list=' + v.list : ''}`;
+  box_playing(false);
+  // YouTube uygulaması (Premium hesabıyla arka planda çalar); yoksa web sürümü
+  location.href = `youtube://www.youtube.com/watch?${q}`;
+  setTimeout(() => { if (!document.hidden) window.open(`https://www.youtube.com/watch?${q}`, '_blank'); }, 1800);
+}
+
+function ytApiLoad() {
+  return new Promise((res, rej) => {
+    if (window.YT?.Player) return res();
+    window.onYouTubeIframeAPIReady = res;
+    const s = document.createElement('script'); s.src = 'https://www.youtube.com/iframe_api'; s.onerror = () => rej(new Error('YouTube oynatıcı yüklenemedi'));
+    document.head.appendChild(s);
+  });
+}
+async function ytEmbed(v) {
+  try { await ytApiLoad(); } catch (e) { toast(e.message); return ytOpenApp(v); }
+  if (ytPlayer?.loadVideoById) { ytPlayer.loadVideoById(v.id); return; }
+  ytPlayer = new YT.Player('ytFrame', {
+    videoId: v.id, host: 'https://www.youtube-nocookie.com',
+    playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
+    events: {
+      onReady: e => { e.target.setVolume(ytVol); e.target.playVideo(); },
+      onStateChange: e => { box_playing(e.data === 1); if (e.data === 0) ytControl('next', true); },
+      onError: () => { addLog('sys', 'Bu video Jarvis içinde çalınamıyor, sıradakine geçiyorum.'); ytControl('next', true); }
+    }
+  });
+}
+function box_playing(on) { ytIsPlaying = on; $('#yt').classList.toggle('playing', on); $('#ytTog').textContent = on ? '⏸' : '▶'; }
+
+function ytControl(action, auto) {
+  if (!ytQueue.length) return;
+  if (action === 'next') { if (ytIdx < ytQueue.length - 1) { ytIdx++; ytStart(); } else if (!auto) toast('Sıradaki şarkı yok.'); else box_playing(false); return; }
+  if (action === 'prev') { if (ytPlayer?.getCurrentTime && ytPlayer.getCurrentTime() > 8) ytPlayer.seekTo(0); else if (ytIdx > 0) { ytIdx--; ytStart(); } return; }
+  if (action === 'open') { const v = ytQueue[ytIdx]; ytPlayer?.pauseVideo?.(); return ytOpenApp(v); }
+  if (action === 'close') { ytPlayer?.stopVideo?.(); $('#yt').classList.remove('on'); box_playing(false); return; }
+  if (!ytPlayer?.getPlayerState) return;
+  if (action === 'pause' || (action === 'toggle' && ytIsPlaying)) ytPlayer.pauseVideo(); else ytPlayer.playVideo();
+}
+$$('#yt [data-yt]').forEach(b => b.onclick = () => ytControl(b.dataset.yt));
+
+// Jarvis konuşurken müziğin sesini kıs
+function ytDuck(on) {
+  if (!ytPlayer?.setVolume || !ytIsPlaying) return;
+  ytPlayer.setVolume(on ? Math.round(ytVol * .2) : ytVol);
+}
+function ytVolume(dir) {
+  ytVol = Math.max(5, Math.min(100, ytVol + (dir === 'ac' ? 20 : -20)));
+  ytPlayer?.setVolume?.(ytVol);
 }
 
 /* =========================================================
@@ -824,7 +977,7 @@ async function syncNow() {
 }
 setInterval(() => { if (token && !document.hidden) syncNow(); }, 45e3);
 setInterval(() => { if (token && !document.hidden) { loadMails().catch(() => {}); loadTasks().catch(() => {}); loadCalendar().catch(() => {}); } }, 5 * 60e3);
-setInterval(() => { if (!document.hidden) { loadWeather().catch(() => {}); loadNews().catch(() => {}); } }, 30 * 60e3);
+setInterval(() => { if (!document.hidden) { refreshWeather(); loadNews().catch(() => {}); } }, 30 * 60e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && token) afterGoogle(); });
 
 
@@ -972,15 +1125,24 @@ function getPosition() {
 async function cityCoords(name) {
   const c = load('jarvis.geo', null);
   if (c && c.q === name) return c;
-  const j = await fetchJSON(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=1&language=tr`, {});
-  const r = j.results?.[0]; if (!r) throw new Error('şehir bulunamadı');
-  const out = { q: name, lat: r.latitude, lon: r.longitude, name: r.name };
-  save('jarvis.geo', out); return out;
+  // "Istanbul, Türkiye", "Kadıköy / İstanbul", "istanbul" gibi yazımları da dene
+  const base = name.split(/[,/(]/)[0].trim();
+  const tries = [...new Set([base, base.toLocaleUpperCase('tr')[0] + base.slice(1).toLocaleLowerCase('tr'),
+    base.replace(/^I/, 'İ'), base.replace(/^i/, 'İ'), name.split(/[,/]/).pop().trim()])].filter(Boolean);
+  for (const q of tries) {
+    const j = await fetchJSON(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=tr`, {});
+    const r = (j.results || []).find(x => x.country_code === 'TR') || j.results?.[0];
+    if (r) { const out = { q: name, lat: r.latitude, lon: r.longitude, name: r.name }; save('jarvis.geo', out); return out; }
+  }
+  throw new Error(`"${name}" şehri bulunamadı`);
 }
 async function loadWeather() {
   let loc;
   if (M.profile.city) loc = await cityCoords(M.profile.city);
-  else { loc = await getPosition(); }
+  else {
+    try { loc = await getPosition(); }
+    catch (e) { throw new Error(e.code === 1 ? 'konum izni verilmedi' : 'konum alınamadı'); }
+  }
   const u = `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&hourly=precipitation_probability,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code,sunset&timezone=auto&forecast_days=1`;
   const j = await fetchJSON(u, {});
   const hr = new Date().getHours();
@@ -999,6 +1161,21 @@ function locative(name) { // İstanbul'da, İzmir'de, Sinop'ta, Tokat'ta
   const back = 'aıou'.includes(v), hard = 'fstkçşhp'.includes(low.at(-1));
   return `${name}'${hard ? 't' : 'd'}${back ? 'a' : 'e'}`;
 }
+
+let wxErrShown = false;
+function weatherError(e) {
+  console.warn('hava', e);
+  const msg = e.message || String(e);
+  const noCity = !M.profile.city;
+  $('#wx').innerHTML = `<b style="font-size:13px;cursor:pointer;color:var(--a)">${noCity ? '📍 ŞEHİR EKLE' : '⚠ HAVA'}</b>`;
+  $('#wx').title = msg + ' — dokunarak ' + (noCity ? 'şehrinizi girin' : 'tekrar deneyin');
+  if (!wxErrShown) {
+    wxErrShown = true;
+    addLog('sys', noCity ? `HAVA: ${msg}. Ayarlar'a şehrinizi yazın (örn. İstanbul).` : `HAVA: ${msg}. Ayarlar'daki şehir adını kontrol edin (sadece şehir adı, örn. İstanbul).`);
+  }
+}
+const refreshWeather = () => loadWeather().then(() => { wxErrShown = false; $('#wx').title = 'Hava durumu · yenilemek için dokunun'; }).catch(weatherError);
+$('#wx').onclick = () => { if (!M.profile.city && $('#wx').textContent.includes('ŞEHİR')) { openSettings(); setTimeout(() => $('#sCity').focus(), 150); } else { $('#wx').style.opacity = .4; refreshWeather().finally(() => $('#wx').style.opacity = 1); } };
 function weatherText() {
   if (!weather) return '';
   const w = weather, d = WMO[w.code]?.[0] || '';
@@ -1124,24 +1301,25 @@ function whatsappContext() {
    AYARLAR
    ========================================================= */
 function fillSettings() {
-  $('#sName').value = M.profile.name; $('#sCity').value = M.profile.city || ''; $('#sHitap').value = M.profile.hitap; $('#sVip').value = M.profile.vip; $('#sAbout').value = M.profile.about;
+  $('#sName').value = M.profile.name; if ($('#sCity')) $('#sCity').value = M.profile.city || ''; $('#sHitap').value = M.profile.hitap; $('#sVip').value = M.profile.vip; $('#sAbout').value = M.profile.about;
   $('#kGem').value = S.geminiKey; $('#kGroq').value = S.groqKey; $('#kOr').value = S.orKey;
   $('#mGem').value = S.geminiModel; $('#mGroq').value = S.groqModel; $('#mOr').value = S.orModel;
   $('#sCid').value = S.clientId; $('#sDev').value = S.deviceName; $('#sRate').value = S.rate; $('#sWake').value = S.wake ? '1' : '0';
-  $('#sVoice').value = S.voice;
+  $('#sVoice').value = S.voice; if ($('#kYt')) { $('#kYt').value = S.ytKey || ''; $('#sYtMode').value = S.ytMode || 'auto'; }
 }
 function openSettings() { fillSettings(); renderFacts(); loadVoices(); $('#settings').classList.add('open'); }
 $('#setBtn').onclick = openSettings;
 $('#sClose').onclick = () => $('#settings').classList.remove('open');
 $('#sTest').onclick = () => { readSettings(); speak(`Merhaba ${M.profile.name || ''}. Ben Jarvis. Sesim kulağınıza hoş geliyor mu?`); };
 function readSettings() {
-  const p = { name: $('#sName').value.trim(), hitap: $('#sHitap').value.trim() || 'efendim', vip: $('#sVip').value.trim(), about: $('#sAbout').value.trim(), city: $('#sCity').value.trim() };
+  const p = { name: $('#sName').value.trim(), hitap: $('#sHitap').value.trim() || 'efendim', vip: $('#sVip').value.trim(), about: $('#sAbout').value.trim(), city: $('#sCity') ? $('#sCity').value.trim() : (M.profile.city || '') };
   if (JSON.stringify(p) !== JSON.stringify({ name: M.profile.name, hitap: M.profile.hitap, vip: M.profile.vip, about: M.profile.about, city: M.profile.city || '' }))
     M.profile = { ...p, updated: Date.now() };
   Object.assign(S, {
     geminiKey: $('#kGem').value.trim(), groqKey: $('#kGroq').value.trim(), orKey: $('#kOr').value.trim(),
     geminiModel: $('#mGem').value.trim() || DEFAULTS.geminiModel, groqModel: $('#mGroq').value.trim() || DEFAULTS.groqModel, orModel: $('#mOr').value.trim() || DEFAULTS.orModel,
     clientId: $('#sCid').value.trim(), deviceName: $('#sDev').value.trim() || DEFAULTS.deviceName,
+    ytKey: $('#kYt') ? $('#kYt').value.trim() : S.ytKey, ytMode: $('#sYtMode') ? $('#sYtMode').value : S.ytMode,
     voice: $('#sVoice').value, rate: +$('#sRate').value || 1, wake: $('#sWake').value === '1'
   });
 }
@@ -1150,7 +1328,7 @@ $('#sSave').onclick = () => {
   $('#settings').classList.remove('open'); fx.ok(); refreshChips();
   toast('Ayarlar kaydedildi.');
   if (S.clientId && !token) connectGoogle(true);
-  loadWeather().catch(() => {});
+  localStorage.removeItem('jarvis.geo'); refreshWeather();
   stopRec(true); resumeWake();
 };
 
@@ -1159,7 +1337,7 @@ $('#sSave').onclick = () => {
    ========================================================= */
 async function bootSequence() {
   const lines = [
-    ['ÇEKİRDEK SİSTEMLER', 'TAMAM'],
+    ['ÇEKİRDEK SİSTEMLER · SÜRÜM ' + JARVIS_VERSION + ($('#kYt') ? '' : ' (index.html ESKİ!)'), $('#kYt') ? 'TAMAM' : 'GÜNCELLE'],
     ['SES SENTEZİ · TÜRKÇE', 'speechSynthesis' in window ? 'TAMAM' : 'YOK'],
     ['KONUŞMA TANIMA', SR ? 'TAMAM' : 'KLAVYE'],
     ['BEYİN YÖNLENDİRİCİ', hasBrain() ? providers().map(p => p.name).join(' › ').toUpperCase() : 'YEREL MOD'],
@@ -1186,7 +1364,7 @@ $('#bootBtn').onclick = async () => {
   M.history.slice(-4).forEach(h => addLog(h.r, h.c, h.d !== S.deviceName ? h.d : ''));
   if (S.clientId && S.googleWanted && !token) connectGoogle(true);
   if (token) afterGoogle();
-  loadWeather().catch(e => console.warn('hava', e));
+  refreshWeather();
   loadNews().catch(() => {});
 
   await sleep(500);
